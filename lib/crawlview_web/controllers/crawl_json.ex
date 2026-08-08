@@ -106,4 +106,10 @@ defmodule CrawlviewWeb.CrawlJSON do
 
   defp error_details(:not_found),
     do: {"not_found", "That crawl does not exist or is no longer available."}
+
+  defp error_details(:rate_limited),
+    do: {"rate_limited", "You have started several crawls already. Try again in a minute."}
+
+  defp error_details(:at_capacity),
+    do: {"at_capacity", "Too many crawls are running right now. Try again in half a minute."}
 end

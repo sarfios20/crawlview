@@ -42,7 +42,10 @@ defmodule CrawlviewWeb.CrawlLive do
         status: :idle,
         stats: nil,
         finished_reason: nil,
-        presets: @presets
+        presets: @presets,
+        # get_connect_info/2 only answers while mounting, so the client's identity is
+        # taken once here and kept for the life of the session.
+        client_key: CrawlviewWeb.ClientLimit.client_key(socket)
       )
 
     {:ok, socket}
@@ -296,20 +299,20 @@ defmodule CrawlviewWeb.CrawlLive do
   defp start_crawl(socket, url) do
     socket = assign(socket, form: crawl_form(url), validation_error: nil, crawl_notice: nil)
 
-    case Crawl.start(url, []) do
-      {:ok, id} ->
-        # start/2 cannot reveal an id before the server starts. Subscribing
-        # immediately and then snapshotting closes that unavoidable event gap.
-        :ok = Crawl.subscribe(id)
+    with :ok <- CrawlviewWeb.ClientLimit.allow(socket.assigns.client_key),
+         {:ok, id} <- Crawl.start(url, []) do
+      # start/2 cannot reveal an id before the server starts. Subscribing immediately
+      # and then snapshotting closes that unavoidable event gap.
+      :ok = Crawl.subscribe(id)
 
-        socket =
-          case Crawl.snapshot(id) do
-            {:ok, state} -> restore_snapshot(socket, state)
-            :not_found -> unavailable_crawl(socket)
-          end
+      socket =
+        case Crawl.snapshot(id) do
+          {:ok, state} -> restore_snapshot(socket, state)
+          :not_found -> unavailable_crawl(socket)
+        end
 
-        {:noreply, push_patch(socket, to: ~p"/?crawl=#{id}")}
-
+      {:noreply, push_patch(socket, to: ~p"/?crawl=#{id}")}
+    else
       {:error, reason} ->
         {:noreply, assign(socket, :validation_error, error_sentence(reason))}
     end
@@ -362,6 +365,12 @@ defmodule CrawlviewWeb.CrawlLive do
 
   defp error_sentence(:private_address),
     do: "That address points to a private or reserved network."
+
+  defp error_sentence(:rate_limited),
+    do: "You have started several crawls already. Give it a minute and try again."
+
+  defp error_sentence(:at_capacity),
+    do: "Too many crawls are running right now. Try again in half a minute."
 
   defp error_sentence(_reason), do: "That address cannot be crawled."
 

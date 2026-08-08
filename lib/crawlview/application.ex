@@ -12,8 +12,15 @@ defmodule Crawlview.Application do
       {DNSCluster, query: Application.get_env(:crawlview, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Crawlview.PubSub},
       {Registry, keys: :unique, name: Crawlview.Crawl.Registry},
-      {DynamicSupervisor, strategy: :one_for_one, name: Crawlview.Crawl.Supervisor},
+      # An absolute ceiling on crawl processes, which is a memory guard for this server.
+      # The politeness ceiling that protects OTHER people's servers is separate and
+      # smaller, lives in Crawlview.Crawl, and counts only crawls that are still running.
+      {DynamicSupervisor,
+       strategy: :one_for_one,
+       name: Crawlview.Crawl.Supervisor,
+       max_children: Crawlview.Crawl.max_processes()},
       {Task.Supervisor, name: Crawlview.Crawl.TaskSupervisor},
+      CrawlviewWeb.RateLimit,
       # Start a worker by calling: Crawlview.Worker.start_link(arg)
       # {Crawlview.Worker, arg},
       # Start to serve requests, typically the last entry

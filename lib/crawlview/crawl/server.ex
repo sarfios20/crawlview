@@ -34,7 +34,7 @@ defmodule Crawlview.Crawl.Server do
   # when options come from a hostile client: 2,000 pages, depth 20, 32 global
   # requests, 8 requests per host, a 60,000 ms fetch timeout, and a 600,000 ms
   # crawl budget. All duration values in this server are milliseconds.
-  @maximums %{
+  @default_maximums %{
     max_pages: 2_000,
     max_depth: 20,
     concurrency: 32,
@@ -51,6 +51,14 @@ defmodule Crawlview.Crawl.Server do
   # The allowance is small and finite because a misconfigured site can bounce between
   # two names forever, and a crawl that never begins is worse than one that stops.
   @max_root_rebases 3
+
+  # A finished crawl stays readable for a while and then goes away. It used to live
+  # until the node restarted, which was fine until the node grew a ceiling on how many
+  # crawls may exist: finished ones would fill it and the ninth visitor would be told
+  # the service was busy by a server doing nothing at all. Twenty minutes is long
+  # enough to read a result and share the link, and the UI already has a sentence for
+  # a crawl that is no longer there.
+  @finished_ttl_ms 20 * 60 * 1_000
 
   # Invariants:
   #
@@ -83,6 +91,7 @@ defmodule Crawlview.Crawl.Server do
             next_host_start: %{},
             started_monotonic_ms: nil,
             rebases_left: nil,
+            expiry_timer: nil,
             budget_timer: nil,
             dispatch_timer: nil
 
@@ -207,6 +216,10 @@ defmodule Crawlview.Crawl.Server do
         {:noreply, data}
     end
   end
+
+  # Stopping normally releases this crawl's slot in the supervisor. `snapshot/1` then
+  # answers :not_found, which the interface already explains to the person looking.
+  def handle_info(:expired, data), do: {:stop, :normal, data}
 
   def handle_info({:DOWN, reference, :process, _pid, _reason}, data) do
     case Map.pop(data.in_flight, reference) do
@@ -471,6 +484,7 @@ defmodule Crawlview.Crawl.Server do
   defp finish(data, reason) do
     cancel_timer(data.budget_timer)
     cancel_timer(data.dispatch_timer)
+    cancel_timer(data.expiry_timer)
 
     Enum.each(data.in_flight, fn {_reference, work} ->
       cancel_timer(work.timeout_timer)
@@ -493,6 +507,13 @@ defmodule Crawlview.Crawl.Server do
 
     :ok = Phoenix.PubSub.broadcast(Crawlview.PubSub, topic(data), {:finished, stats, reason})
 
+    expiry_timer = Process.send_after(self(), :expired, @finished_ttl_ms)
+
+    # A finished crawl is still readable but is no longer spending anybody's bandwidth,
+    # so it must stop counting against the politeness ceiling. Without this, a handful of
+    # visitors would leave a public demo reporting itself busy for the whole TTL.
+    {_new, _old} = Registry.update_value(@registry, data.public.id, fn _ -> :finished end)
+
     # Finished servers deliberately live until the node restarts. This keeps a
     # snapshot readable without persistence; deployment or restart loses it.
     %{
@@ -501,7 +522,8 @@ defmodule Crawlview.Crawl.Server do
         frontier: :queue.new(),
         in_flight: %{},
         host_counts: %{},
-        dispatch_timer: nil
+        dispatch_timer: nil,
+        expiry_timer: expiry_timer
     }
   end
 
@@ -540,7 +562,16 @@ defmodule Crawlview.Crawl.Server do
 
   defp clamp_options(_invalid), do: @defaults
 
+  # The ceilings are configuration, not constants: a public deployment wants tighter
+  # limits than a laptop, and because every default is clamped by them, lowering a
+  # ceiling lowers the effective default too. One knob does both jobs.
+  defp maximums do
+    Map.merge(@default_maximums, Map.new(Application.get_env(:crawlview, :crawl_maximums, [])))
+  end
+
   defp do_clamp_options(opts) do
+    maximums = maximums()
+
     Map.new(@defaults, fn {key, default} ->
       minimum = if key in [:max_depth, :min_interval_ms], do: 0, else: 1
 
@@ -550,9 +581,12 @@ defmodule Crawlview.Crawl.Server do
           _invalid -> default
         end
 
-      {key, value |> max(minimum) |> min(Map.fetch!(@maximums, key))}
+      {key, value |> max(minimum) |> min(Map.fetch!(maximums, key))}
     end)
   end
 
-  defp via(id), do: {:via, Registry, {@registry, id}}
+  # The Registry entry carries whether this crawl is still running. That lets the
+  # capacity check count live crawls with one lookup instead of asking every server how
+  # it is doing, and it is the owning process that updates it, so it cannot go stale.
+  defp via(id), do: {:via, Registry, {@registry, id, :running}}
 end

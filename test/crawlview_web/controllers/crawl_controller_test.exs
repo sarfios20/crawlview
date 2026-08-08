@@ -151,4 +151,40 @@ defmodule CrawlviewWeb.CrawlControllerTest do
     options = Keyword.merge(Req.default_options(), plug: plug, retry: false)
     Req.default_options(options)
   end
+
+  describe "abuse limits" do
+    test "refuses a client that has started too many crawls, with 429", %{conn: conn} do
+      previous = Application.get_env(:crawlview, :client_crawl_limit)
+      Application.put_env(:crawlview, :client_crawl_limit, 1)
+      CrawlviewWeb.RateLimit.reset()
+
+      on_exit(fn ->
+        Application.put_env(:crawlview, :client_crawl_limit, previous)
+        CrawlviewWeb.RateLimit.reset()
+      end)
+
+      body = %{url: "https://example.com/", max_pages: 2, min_interval_ms: 0}
+
+      assert conn |> post(~p"/api/crawls", body) |> json_response(201)
+
+      refused = post(conn, ~p"/api/crawls", body)
+      assert %{"error" => %{"code" => "rate_limited"}} = json_response(refused, 429)
+      # Retry-After turns a refusal into an instruction.
+      assert get_resp_header(refused, "retry-after") == ["60"]
+    end
+
+    test "reports a full node with 503 rather than a client error", %{conn: conn} do
+      # Zero running crawls allowed, so the very next request is refused whatever else the
+      # suite left lying around. The ceiling counts running crawls, not finished ones.
+      previous = Application.get_env(:crawlview, :max_concurrent_crawls)
+      Application.put_env(:crawlview, :max_concurrent_crawls, 0)
+      on_exit(fn -> Application.put_env(:crawlview, :max_concurrent_crawls, previous) end)
+
+      refused = post(conn, ~p"/api/crawls", %{url: "https://example.com/", min_interval_ms: 0})
+
+      # 503, not 4xx: the client asked for something reasonable and the server is full.
+      assert %{"error" => %{"code" => "at_capacity"}} = json_response(refused, 503)
+      assert get_resp_header(refused, "retry-after") == ["30"]
+    end
+  end
 end

@@ -164,6 +164,58 @@ defmodule Crawlview.CrawlTest do
     assert crawl.snapshot.pages[@root].links == [guide_url]
   end
 
+  test "the running ceiling refuses a new crawl and gives the slot back when it finishes" do
+    # The ceiling counts crawls that are still FETCHING, because that is what bounds the
+    # traffic this server aims at other people. Finished crawls stay readable and stop
+    # counting: otherwise a handful of visitors would leave a public demo calling itself
+    # busy for as long as the results linger.
+    # Relative to whatever is already running, because ExUnit does not promise an order
+    # and a test that needs to go first is a test that will fail for the wrong reason.
+    previous = Application.get_env(:crawlview, :max_concurrent_crawls)
+    Application.put_env(:crawlview, :max_concurrent_crawls, running_crawls() + 1)
+    on_exit(fn -> Application.put_env(:crawlview, :max_concurrent_crawls, previous) end)
+
+    configure_site(%{
+      "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
+      "/" => html("<a href='/a'>a</a><a href='/b'>b</a><a href='/c'>c</a>"),
+      "/a" => html("<title>a</title>"),
+      "/b" => html("<title>b</title>"),
+      "/c" => html("<title>c</title>")
+    })
+
+    # Paced slowly enough that this crawl is unambiguously still running below.
+    assert {:ok, holder} = Crawl.start(@root, min_interval_ms: 300)
+    :ok = Crawl.subscribe(holder)
+    release_site()
+
+    assert Crawl.start(@root, min_interval_ms: 0) == {:error, :at_capacity}
+
+    assert_receive {:finished, _stats, _reason}, 10_000
+    assert {:ok, _next} = Crawl.start(@root, min_interval_ms: 0)
+  end
+
+  test "a finished crawl eventually gives its slot back" do
+    # Finished crawls stay readable for a while, so without an expiry they would fill the
+    # ceiling and a server doing nothing at all would start reporting itself as busy.
+    crawl =
+      crawl(%{
+        "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
+        "/" => html("<title>One</title>")
+      })
+
+    assert {:ok, _state} = Crawl.snapshot(crawl.id)
+    assert Process.whereis(Crawlview.Crawl.Registry)
+
+    # The expiry is a message to the crawl's own process, so triggering it directly is
+    # the honest way to assert the behaviour without waiting twenty minutes.
+    [{server, _}] = Registry.lookup(Crawlview.Crawl.Registry, crawl.id)
+    reference = Process.monitor(server)
+    send(server, :expired)
+
+    assert_receive {:DOWN, ^reference, :process, _pid, :normal}, 1_000
+    assert Crawl.snapshot(crawl.id) == :not_found
+  end
+
   test "a redirect that only adds a trailing slash is followed to the real page" do
     # The regression that made an ordinary blog uncrawlable. The server answers /a
     # with a redirect to /a/, so if those two normalize to one key the target looks
@@ -471,6 +523,12 @@ defmodule Crawlview.CrawlTest do
     {:ok, snapshot} = Crawl.snapshot(id)
 
     %{id: id, stats: stats, reason: reason, snapshot: snapshot}
+  end
+
+  defp running_crawls do
+    Crawlview.Crawl.Registry
+    |> Registry.select([{{:_, :_, :"$1"}, [{:==, :"$1", :running}], [true]}])
+    |> length()
   end
 
   defp await_finished do

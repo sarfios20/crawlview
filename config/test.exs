@@ -20,3 +20,8 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# The suite starts far more than a handful of crawls and does not want to be rationed
+# while doing it. The limits themselves are tested by setting them explicitly.
+config :crawlview, :max_concurrent_crawls, 200
+config :crawlview, :client_crawl_limit, 1_000

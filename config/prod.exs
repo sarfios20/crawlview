@@ -19,6 +19,21 @@ config :crawlview, CrawlviewWeb.Endpoint,
     ]
   ]
 
+# A public deployment is a guest on other people's servers and shares one small box,
+# so its ceilings are tighter than a laptop's. Because every per-crawl default is
+# clamped by these, lowering a ceiling lowers the effective default too: a client
+# asking for 200 pages gets 60, and does not need to know that it was capped.
+config :crawlview, :crawl_maximums,
+  max_pages: 60,
+  max_depth: 4,
+  budget_ms: 90_000
+
+# At most four crawls fetching at once, which bounds what this server aims outward.
+config :crawlview, :max_concurrent_crawls, 4
+
+# Far more may sit around still readable; that is only this server's memory.
+config :crawlview, :max_crawl_processes, 60
+
 # Do not print debug messages in production
 config :logger, level: :info
 

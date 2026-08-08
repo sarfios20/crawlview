@@ -21,14 +21,29 @@ defmodule CrawlviewWeb.CrawlController do
   @default_page_limit 100
   @maximum_page_limit 100
 
+  # The limiter guards this action rather than the whole pipeline. Reading a snapshot is
+  # cheap and gets polled on purpose; starting a crawl is the one request that spends
+  # someone else's bandwidth, so that is the one worth rationing.
   @spec create(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def create(conn, %{"url" => url} = params) when is_binary(url) do
-    case Crawl.start(url, crawl_options(params)) do
-      {:ok, id} ->
+    with :ok <- CrawlviewWeb.ClientLimit.allow(conn),
+         {:ok, id} <- Crawl.start(url, crawl_options(params)) do
+      conn
+      |> put_status(:created)
+      |> put_resp_header("location", ~p"/api/crawls/#{id}")
+      |> render(:created, id: id)
+    else
+      {:error, :rate_limited} ->
         conn
-        |> put_status(:created)
-        |> put_resp_header("location", ~p"/api/crawls/#{id}")
-        |> render(:created, id: id)
+        |> put_resp_header("retry-after", "60")
+        |> render_error(:too_many_requests, :rate_limited)
+
+      # 503 rather than 429: the client did nothing wrong, the server is full. Saying so
+      # with a Retry-After is the difference between "go away" and "come back shortly".
+      {:error, :at_capacity} ->
+        conn
+        |> put_resp_header("retry-after", "30")
+        |> render_error(:service_unavailable, :at_capacity)
 
       {:error, reason} ->
         render_error(conn, :unprocessable_entity, reason)

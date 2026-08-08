@@ -173,9 +173,18 @@ cheap. An opaque value, not a process: no global cache to invalidate, trivially 
 @spec stop(id :: String.t()) :: :ok
 ```
 
-That is the entire interface. `{:error, _}` from `start/2` only ever reflects invalid human input
-(it is `Url.public_http_url/1` speaking). `stop/1` on an unknown or already-finished crawl is
-`:ok`, because "make sure this is not running" has no failure mode worth a caller's attention.
+That is the entire interface. `stop/1` on an unknown or already-finished crawl is `:ok`, because
+"make sure this is not running" has no failure mode worth a caller's attention.
+
+`{:error, _}` from `start/2` means one of two things, and both are answers a caller has to relay
+to a person rather than defects:
+
+- **Invalid input**, which is `Url.public_http_url/1` speaking.
+- **`:at_capacity`**, when the node already has `max_concurrent_crawls` crawls fetching. This is
+  the ceiling that stops a polite crawler being used as an amplifier: every individual crawl
+  behaves, so without a limit on how many there are, politeness bounds nothing. It counts crawls
+  that are still FETCHING; finished ones stay readable and stop counting, because they are no
+  longer spending anyone's bandwidth.
 
 Options, all with defaults, all clamped server-side so a hostile client cannot ask for the moon:
 `max_pages` (200), `max_depth` (5), `concurrency` (8), `per_host` (2), `timeout_ms` (10_000),
@@ -229,6 +238,23 @@ The API and the LiveView must be two renderings of the same snapshot, not two im
   pages nothing links to. Saying so is more honest than a feature that half works.
 - **One site at a time, small budgets.** This is a demo running on a small box, and it is a guest
   on other people's servers.
+
+## Being a good neighbour, and who enforces what
+
+Three limits, at three layers, answering three different questions. Keeping them apart is the
+point: collapsing them into one number would mean none of them could be reasoned about.
+
+| Limit | Protects | Where it lives |
+|---|---|---|
+| per-host in flight, and a floor between requests | the site being crawled | `Crawl.Server` |
+| crawls fetching at once (`max_concurrent_crawls`) | every site, from being amplified | `Crawl.start/2` |
+| crawls started per client per window | fairness between visitors | `CrawlviewWeb.ClientLimit` |
+
+The client limit lives in the web layer and nowhere else. "Who is asking" is a transport
+question; teaching the crawler about clients to solve an abuse problem would drag an HTTP concern
+into the domain. And note which layer each error surfaces as: a full node is **503** because the
+client did nothing wrong, while a client over its allowance is **429**. Both carry `Retry-After`,
+because a refusal without a next step is just a door.
 
 ## Rules for agents working here
 

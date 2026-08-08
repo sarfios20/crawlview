@@ -11,6 +11,31 @@ defmodule Crawlview.Crawl do
 
   @supervisor Crawlview.Crawl.Supervisor
   @registry Crawlview.Crawl.Registry
+  @default_max_concurrent 8
+  @default_max_processes 100
+
+  @doc """
+  How many crawls may be RUNNING at once across the whole node.
+
+  This is the politeness ceiling: it bounds how much traffic this server can aim at the
+  outside world at any moment. Finished crawls stay readable but stop counting, because
+  they are not spending anyone's bandwidth any more.
+  """
+  @spec max_concurrent() :: pos_integer()
+  def max_concurrent do
+    Application.get_env(:crawlview, :max_concurrent_crawls, @default_max_concurrent)
+  end
+
+  @doc """
+  How many crawl processes may exist at once, running or merely still readable.
+
+  A different question with a different answer: this one is about this server's memory
+  rather than about other people's servers, so it is far more generous.
+  """
+  @spec max_processes() :: pos_integer()
+  def max_processes do
+    Application.get_env(:crawlview, :max_crawl_processes, @default_max_processes)
+  end
 
   defmodule State do
     @moduledoc """
@@ -41,7 +66,8 @@ defmodule Crawlview.Crawl do
   @spec start(url :: String.t(), opts :: keyword()) ::
           {:ok, id :: String.t()} | {:error, atom()}
   def start(url, opts \\ []) do
-    with {:ok, root_url} <- Crawlview.Url.public_http_url(url) do
+    with {:ok, root_url} <- Crawlview.Url.public_http_url(url),
+         :ok <- capacity_available() do
       start_server(root_url, opts)
     end
   end
@@ -78,13 +104,36 @@ defmodule Crawlview.Crawl do
     :ok
   end
 
+  # Two layers, on purpose. This check reads the ceiling on every call, so it responds to
+  # configuration and gives the caller a reason it can explain to a person. The
+  # supervisor's own max_children is the race-free backstop underneath: two simultaneous
+  # starts could both pass this check, and the supervisor is what makes the limit hard.
+  defp capacity_available do
+    running =
+      Registry.select(@registry, [{{:_, :_, :"$1"}, [{:==, :"$1", :running}], [true]}])
+      |> length()
+
+    if running < max_concurrent(), do: :ok, else: {:error, :at_capacity}
+  end
+
   defp start_server(root_url, opts) do
     id = random_id()
 
     case DynamicSupervisor.start_child(@supervisor, {Server, {id, root_url, opts}}) do
-      {:ok, _server} -> {:ok, id}
-      {:error, {:already_started, _server}} -> start_server(root_url, opts)
-      {:error, reason} -> raise "could not start crawl server: #{inspect(reason)}"
+      {:ok, _server} ->
+        {:ok, id}
+
+      {:error, {:already_started, _server}} ->
+        start_server(root_url, opts)
+
+      # Being at capacity is an ordinary, expected answer that a caller has to relay to
+      # a person, so it is a value rather than an exception. Raising here would make a
+      # busy server look like a bug and would take the request down with it.
+      {:error, :max_children} ->
+        {:error, :at_capacity}
+
+      {:error, reason} ->
+        raise "could not start crawl server: #{inspect(reason)}"
     end
   end
 
