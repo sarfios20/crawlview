@@ -11,6 +11,9 @@ defmodule Crawlview.Application do
       CrawlviewWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:crawlview, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Crawlview.PubSub},
+      {Registry, keys: :unique, name: Crawlview.Crawl.Registry},
+      {DynamicSupervisor, strategy: :one_for_one, name: Crawlview.Crawl.Supervisor},
+      {Task.Supervisor, name: Crawlview.Crawl.TaskSupervisor},
       # Start a worker by calling: Crawlview.Worker.start_link(arg)
       # {Crawlview.Worker, arg},
       # Start to serve requests, typically the last entry

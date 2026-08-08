@@ -63,25 +63,28 @@ defmodule Crawlview.Fetcher do
       but no Req request, response, or exception crosses this module boundary.
   """
 
-  # Invariant: fetch/2 is total: it never raises and never returns an error tuple.
-  # Fetching is a boundary operation with many routine failure modes; normalizing
-  # them here avoids forcing every caller to understand and pattern-match changing
-  # transport-library exceptions merely to continue its own work.
+  # Invariant: fetch/2 is total: it never raises and never returns an error tuple,
+  # for ANY input — a malformed url, garbage opts, or a genuine network failure
+  # are all normalized to a %Result{}. This is deliberately absolute rather than
+  # "total except for programmer error": a caller building a URL or an option
+  # value from untrusted input (exactly what a crawler does — hrefs scraped from
+  # someone else's HTML) must not need a second, exception-shaped code path on
+  # top of the Result outcome it already has to handle.
   @spec fetch(url :: String.t(), opts :: keyword()) :: %Crawlview.Fetcher.Result{}
   def fetch(url, opts \\ []) do
     # A monotonic clock measures elapsed milliseconds without being distorted by
     # wall-clock corrections such as NTP adjustments or daylight-saving changes.
     started_at = System.monotonic_time(:millisecond)
 
-    # Option validation happens OUTSIDE the rescue below, and deliberately raises.
-    # Totality is a promise about the network, not a promise to swallow programmer
-    # error: a caller passing timeout_ms: "10s" has a bug, and reporting it as an
-    # unreachable host would hide that bug behind a plausible-looking result.
-    timeout_ms = positive_integer_option!(opts, :timeout_ms, @default_timeout_ms)
-    max_bytes = non_negative_integer_option!(opts, :max_bytes, @default_max_bytes)
-
+    # Everything that can go wrong — including opts so malformed that reading
+    # them would raise (e.g. `opts` not actually a keyword list) — is inside this
+    # try. An invalid timeout_ms/max_bytes falls back to its default rather than
+    # raising, so a bad option value never even reaches the rescue in practice;
+    # the rescue exists as a backstop for whatever we didn't anticipate.
     result =
       try do
+        timeout_ms = positive_integer_option(opts, :timeout_ms, @default_timeout_ms)
+        max_bytes = non_negative_integer_option(opts, :max_bytes, @default_max_bytes)
         do_fetch(url, opts, timeout_ms, max_bytes)
       rescue
         _exception -> transport_result(:unreachable)
@@ -335,17 +338,17 @@ defmodule Crawlview.Fetcher do
   defp timeout_reason?(%{reason: reason}), do: timeout_reason?(reason)
   defp timeout_reason?(_reason), do: false
 
-  defp positive_integer_option!(opts, key, default) do
+  defp positive_integer_option(opts, key, default) do
     case Keyword.get(opts, key, default) do
       value when is_integer(value) and value > 0 -> value
-      _invalid -> raise ArgumentError, "#{key} must be a positive integer"
+      _invalid -> default
     end
   end
 
-  defp non_negative_integer_option!(opts, key, default) do
+  defp non_negative_integer_option(opts, key, default) do
     case Keyword.get(opts, key, default) do
       value when is_integer(value) and value >= 0 -> value
-      _invalid -> raise ArgumentError, "#{key} must be a non-negative integer"
+      _invalid -> default
     end
   end
 

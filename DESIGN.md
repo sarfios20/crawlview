@@ -119,6 +119,12 @@ failure, a TLS error, a timeout and a 500 all produce a `Result`. The caller has
 code path. This is the clearest application of "define errors out of existence" in the repo and
 it is the reason the crawl loop has no error handling at all.
 
+Totality here is absolute, including for malformed options: an unusable `timeout_ms` falls back
+to its default rather than raising. That is only safe because option values are validated and
+clamped exactly once, at their entry point in `Crawlview.Crawl.start/2` (see below). Validating in
+both places would mean neither place owned it; validating only at the boundary keeps `Fetcher`'s
+promise unqualified and keeps bad configuration from being silently absorbed deep in the system.
+
 Does not follow redirects itself (it reports them; the crawl decides). Caps body size. Sends a
 `User-Agent` identifying the tool with the project URL. Fetches only HTML: bails on other
 content types after headers where possible.
@@ -180,7 +186,7 @@ Options, all with defaults, all clamped server-side so a hostile client cannot a
   id:, root_url:, status: :running | :finished,
   pages: %{String.t() => %Crawlview.Page{}},
   stats: %Crawlview.Stats{},
-  finished_reason: nil | :completed | :stopped | :page_limit | :time_limit
+  finished_reason: nil | :completed | :stopped | :page_limit | :time_limit | :disallowed
 }
 ```
 

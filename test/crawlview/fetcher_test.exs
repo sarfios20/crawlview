@@ -208,19 +208,18 @@ defmodule Crawlview.FetcherTest do
       assert %Result{} = Fetcher.fetch("http://127.0.0.1:1", timeout_ms: 100)
     end
 
-    test "raises on an invalid option rather than reporting it as a failed fetch" do
-      # Totality is a promise about the network, not a promise to swallow caller
-      # bugs. A bad option is a defect in the calling code, and disguising it as
-      # an unreachable host would hide it behind a plausible-looking Result.
+    test "falls back to defaults instead of raising on an invalid option" do
+      # DESIGN.md and the module's own invariant comment are explicit and
+      # unqualified: fetch/2 never raises and never returns an error tuple, for
+      # ANY input. A crawler builds both urls and (indirectly, via crawl config)
+      # option values from data it does not fully control, so there is no input
+      # class this module gets to treat differently. An invalid option value is
+      # simply not "the" value the caller intended — falling back to the default
+      # is what "defining the error out of existence" looks like here.
       plug = fn conn -> Req.Test.html(conn, "<html></html>") end
 
-      assert_raise ArgumentError, fn ->
-        Fetcher.fetch(@url, timeout_ms: "not a number", plug: plug)
-      end
-
-      assert_raise ArgumentError, fn ->
-        Fetcher.fetch(@url, max_bytes: -1, plug: plug)
-      end
+      assert %Result{outcome: :ok} = Fetcher.fetch(@url, timeout_ms: "not a number", plug: plug)
+      assert %Result{outcome: :ok} = Fetcher.fetch(@url, max_bytes: -1, plug: plug)
     end
   end
 
