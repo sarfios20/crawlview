@@ -17,7 +17,7 @@ defmodule CrawlviewWeb.Router do
   scope "/", CrawlviewWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", CrawlLive
   end
 
   # Other scopes may use custom stacks.

@@ -257,8 +257,13 @@ defmodule Crawlview.Crawl.Server do
   end
 
   defp host_ready?(data, host, now) do
+    # A host with no recorded start time is ready immediately, so the default
+    # must be `now` and never a literal like 0. Monotonic time has no epoch and
+    # is large and NEGATIVE on the BEAM, so `0` reads as "far in the future" and
+    # would hold every host back forever: the crawl would sit with a full
+    # frontier and dispatch nothing at all.
     Map.get(data.host_counts, host, 0) < data.opts.per_host and
-      Map.get(data.next_host_start, host, 0) <= now
+      Map.get(data.next_host_start, host, now) <= now
   end
 
   defp earliest_wait_ms(data, items, now) do
