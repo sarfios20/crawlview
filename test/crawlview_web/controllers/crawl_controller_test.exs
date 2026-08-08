@@ -88,7 +88,15 @@ defmodule CrawlviewWeb.CrawlControllerTest do
       end
     end)
 
-    create_conn = post(conn, ~p"/api/crawls", %{url: "https://example.com/", max_pages: 5})
+    # min_interval_ms: 0 opts out of the production pacing default, which exists so a
+    # person can watch a crawl and would otherwise just make this test wait.
+    create_conn =
+      post(conn, ~p"/api/crawls", %{
+        url: "https://example.com/",
+        max_pages: 5,
+        min_interval_ms: 0
+      })
+
     %{"id" => id} = json_response(create_conn, 201)
 
     assert get_resp_header(create_conn, "location") == [~p"/api/crawls/#{id}"]
@@ -96,7 +104,7 @@ defmodule CrawlviewWeb.CrawlControllerTest do
     :ok = Crawl.subscribe(id)
     assert_receive {:root_request_waiting, worker}
     send(worker, :release)
-    assert_receive {:finished, _stats, :completed}
+    assert_receive {:finished, _stats, :completed}, 2_000
 
     show =
       build_conn()

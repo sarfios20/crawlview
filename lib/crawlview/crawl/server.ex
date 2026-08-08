@@ -15,11 +15,17 @@ defmodule Crawlview.Crawl.Server do
   @task_supervisor Crawlview.Crawl.TaskSupervisor
   @broken_outcomes [:not_found, :client_error, :server_error, :timeout, :unreachable]
 
+  # `per_host: 1` and a 350 ms floor between requests are a deliberate default, not a
+  # limitation. This crawl is watched while it happens, and pages landing four at a
+  # time faster than the eye follows defeats the point of watching. It is also the
+  # kinder default for the one server we are a guest on. A caller can raise both, and
+  # a site's own Crawl-delay still wins whenever it asks for more.
   @defaults %{
     max_pages: 200,
     max_depth: 5,
     concurrency: 8,
-    per_host: 2,
+    per_host: 1,
+    min_interval_ms: 350,
     timeout_ms: 10_000,
     budget_ms: 120_000
   }
@@ -33,9 +39,18 @@ defmodule Crawlview.Crawl.Server do
     max_depth: 20,
     concurrency: 32,
     per_host: 8,
+    min_interval_ms: 5_000,
     timeout_ms: 60_000,
     budget_ms: 600_000
   }
+
+  # Sites very commonly answer on one spelling of their host and redirect to another
+  # (apex to www, or the reverse). Whichever one a person types, the crawl should end
+  # up on the spelling the site actually serves, so a redirect ON THE ROOT to another
+  # name for the same site re-bases the crawl there and starts again from that page.
+  # The allowance is small and finite because a misconfigured site can bounce between
+  # two names forever, and a crawl that never begins is worse than one that stops.
+  @max_root_rebases 3
 
   # Invariants:
   #
@@ -67,6 +82,7 @@ defmodule Crawlview.Crawl.Server do
             host_counts: %{},
             next_host_start: %{},
             started_monotonic_ms: nil,
+            rebases_left: nil,
             budget_timer: nil,
             dispatch_timer: nil
 
@@ -106,6 +122,7 @@ defmodule Crawlview.Crawl.Server do
       opts: clamp_options(raw_opts),
       frontier: :queue.in(root, :queue.new()),
       seen: MapSet.new([root_url]),
+      rebases_left: @max_root_rebases,
       started_monotonic_ms: now_ms()
     }
 
@@ -167,14 +184,16 @@ defmodule Crawlview.Crawl.Server do
         data = %{data | in_flight: in_flight}
         data = release_slot(data, work.host)
 
-        data =
-          if data.public.status == :running do
-            record_result(data, work.item, result)
-          else
-            data
-          end
+        cond do
+          data.public.status != :running ->
+            {:noreply, dispatch(data)}
 
-        {:noreply, dispatch(data)}
+          rebase_target(data, work.item, result) ->
+            {:noreply, rebase_root(data, rebase_target(data, work.item, result))}
+
+          true ->
+            {:noreply, dispatch(record_result(data, work.item, result))}
+        end
     end
   end
 
@@ -204,6 +223,65 @@ defmodule Crawlview.Crawl.Server do
           |> dispatch()
 
         {:noreply, data}
+    end
+  end
+
+  # Only the root, only a redirect, only to another spelling of the same site, and
+  # only while the allowance lasts. Anything else is an ordinary page result.
+  defp rebase_target(%{rebases_left: left}, _item, _result) when left <= 0, do: nil
+
+  defp rebase_target(data, %{depth: 0}, %Fetcher.Result{outcome: :redirect} = result) do
+    root = data.public.root_url
+
+    case Url.visitable([result.redirect_to], root, root) do
+      [target] -> if same_resource_renamed?(root, target), do: target
+      _offsite -> nil
+    end
+  end
+
+  defp rebase_target(_data, _item, _result), do: nil
+
+  # Re-basing is only for "the same resource under a different name": the scheme or
+  # the host changed and nothing else. A root that redirects to a different PATH is
+  # an ordinary redirect and stays visible as one, because `/` sending you to `/en/`
+  # is a fact about the site worth seeing rather than a spelling to be resolved away.
+  defp same_resource_renamed?(root, target) do
+    from = URI.parse(root)
+    to = URI.parse(target)
+
+    {from.path, from.query} == {to.path, to.query} and
+      {from.scheme, from.host} != {to.scheme, to.host}
+  end
+
+  defp rebase_root(data, target) do
+    # A fresh start, not a continuation: the redirect page itself is deliberately not
+    # recorded, because it would sit at depth 0 alongside the real root and put two
+    # centres in the picture. What the person asked for was this site; the spelling
+    # they typed is a detail the redirect just settled.
+    robots = Robots.load(target)
+
+    public = %{
+      data.public
+      | root_url: target,
+        pages: %{},
+        stats: %Stats{started_at: data.public.stats.started_at, queued: 1}
+    }
+
+    data = %{
+      data
+      | public: public,
+        robots: robots,
+        frontier: :queue.in(%{url: target, depth: 0, referrer: nil}, :queue.new()),
+        seen: MapSet.new([target]),
+        host_counts: %{},
+        next_host_start: %{},
+        rebases_left: data.rebases_left - 1
+    }
+
+    if Robots.allowed?(robots, target) do
+      dispatch(data)
+    else
+      finish(%{data | frontier: :queue.new()} |> put_queue_count(0), :disallowed)
     end
   end
 
@@ -293,7 +371,9 @@ defmodule Crawlview.Crawl.Server do
     work = %{pid: task.pid, host: host, item: item, timeout_timer: timeout_timer}
     in_flight = Map.put(data.in_flight, task.ref, work)
     host_counts = Map.update(data.host_counts, host, 1, &(&1 + 1))
-    delay_ms = Robots.crawl_delay(data.robots)
+    # The site's own request always wins when it asks for more room; our floor only
+    # ever slows us down relative to what the site permits, never speeds us up.
+    delay_ms = max(Robots.crawl_delay(data.robots), data.opts.min_interval_ms)
     next_host_start = Map.put(data.next_host_start, host, now_ms() + delay_ms)
 
     data
@@ -462,7 +542,7 @@ defmodule Crawlview.Crawl.Server do
 
   defp do_clamp_options(opts) do
     Map.new(@defaults, fn {key, default} ->
-      minimum = if key == :max_depth, do: 0, else: 1
+      minimum = if key in [:max_depth, :min_interval_ms], do: 0, else: 1
 
       value =
         case Keyword.get(opts, key, default) do

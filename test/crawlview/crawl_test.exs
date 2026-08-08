@@ -117,9 +117,9 @@ defmodule Crawlview.CrawlTest do
       "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
       "/" =>
         html("""
-        <a href="/guide/">Guide</a>
+        <a href="/guide">Guide</a>
         <a href="https://EXAMPLE.com/guide#index">Guide again</a>
-        <a href="/index.html">Home</a>
+        <a href="/">Home</a>
         <a href="https://elsewhere.example/page">Elsewhere</a>
         """),
       "/guide" => html("<title>Guide</title>")
@@ -127,6 +127,8 @@ defmodule Crawlview.CrawlTest do
 
     crawl = crawl(site)
 
+    # Host case and fragments collapse because those are equivalences by
+    # specification. A trailing slash does not, because servers disagree about it.
     assert crawl.snapshot.pages[@root].links == [guide_url, @root]
   end
 
@@ -147,11 +149,11 @@ defmodule Crawlview.CrawlTest do
   end
 
   test "different hrefs for the same normalized URL are visited once" do
-    guide_url = "https://example.com/guide"
+    guide_url = "https://example.com/guide?a=1&b=2"
 
     site = %{
       "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
-      "/" => html("<a href='/guide/'>One</a><a href='/guide/index.html#top'>Two</a>"),
+      "/" => html("<a href='/guide?b=2&a=1'>One</a><a href='/guide?a=1&b=2#top'>Two</a>"),
       "/guide" => html("<title>Guide</title>")
     }
 
@@ -160,6 +162,26 @@ defmodule Crawlview.CrawlTest do
     assert crawl.stats.visited == 2
     assert Map.has_key?(crawl.snapshot.pages, guide_url)
     assert crawl.snapshot.pages[@root].links == [guide_url]
+  end
+
+  test "a redirect that only adds a trailing slash is followed to the real page" do
+    # The regression that made an ordinary blog uncrawlable. The server answers /a
+    # with a redirect to /a/, so if those two normalize to one key the target looks
+    # already-visited and the crawl silently stops at depth 1.
+    site = %{
+      "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
+      "/" => html("<a href='/archive'>Archive</a>"),
+      "/archive" => redirect("/archive/"),
+      "/archive/" => html("<title>Archive</title><a href='/archive/page'>A post</a>"),
+      "/archive/page" => html("<title>A post</title>")
+    }
+
+    crawl = crawl(site)
+
+    assert crawl.reason == :completed
+    assert %{outcome: :redirect, depth: 1} = crawl.snapshot.pages["https://example.com/archive"]
+    assert %{outcome: :ok, depth: 2} = crawl.snapshot.pages["https://example.com/archive/"]
+    assert %{outcome: :ok, depth: 3} = crawl.snapshot.pages["https://example.com/archive/page"]
   end
 
   test "max_pages stops at the page limit" do
@@ -440,7 +462,9 @@ defmodule Crawlview.CrawlTest do
 
   defp crawl(site, opts \\ []) do
     configure_site(site)
-    {:ok, id} = Crawl.start(@root, opts)
+    # The production default paces requests so a person can watch the crawl happen.
+    # Tests are not watching, so they opt out and stay fast.
+    {:ok, id} = Crawl.start(@root, Keyword.put_new(opts, :min_interval_ms, 0))
     :ok = Crawl.subscribe(id)
     release_site()
     {stats, reason} = await_finished()

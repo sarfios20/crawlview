@@ -87,29 +87,24 @@ defmodule Crawlview.UrlTest do
              ) == []
     end
 
-    test "the documented www choice treats apex and www hosts as the same site" do
+    test "apex and www count as the same site, so neither is filtered out" do
       assert Url.visitable(
                ["https://www.example.com/about"],
                "https://example.com/",
                "https://example.com/"
-             ) == ["https://example.com/about"]
+             ) == ["https://www.example.com/about"]
     end
 
-    test "a same-site link is rewritten to the root's spelling of the host" do
-      # Having judged www and apex to be one site, emitting both spellings would
-      # give the crawl two deduplication keys for a single page. The root's
-      # spelling wins, in both directions.
+    test "a same-site link keeps its own host rather than the root's spelling" do
+      # Rewriting www into apex (or back) makes a redirect between the two point at
+      # its own source, and the crawl then discards it as already-seen and stops on
+      # its first page. The redirect is what settles which spelling is canonical, so
+      # the two hosts must stay distinguishable here.
       assert Url.visitable(
                ["https://example.com/a", "https://www.example.com/a"],
                "https://www.example.com/",
                "https://www.example.com/"
-             ) == ["https://www.example.com/a"]
-
-      assert Url.visitable(
-               ["https://www.example.com/a", "https://example.com/a"],
-               "https://example.com/",
-               "https://example.com/"
-             ) == ["https://example.com/a"]
+             ) == ["https://example.com/a", "https://www.example.com/a"]
     end
 
     test "lowercases the scheme and host" do
@@ -160,12 +155,16 @@ defmodule Crawlview.UrlTest do
              ) == ["https://example.com/search?a=1&b=2"]
     end
 
-    test "the documented trailing-slash choice uses the slashless non-root form" do
+    test "keeps the trailing slash, because /a and /a/ are not the same resource" do
+      # This is the regression that made a very ordinary site uncrawlable: many
+      # servers answer /a with a redirect to /a/. Folding the two together makes the
+      # redirect target equal to its own source, so the crawl treats it as already
+      # visited and never advances past depth 1.
       assert Url.visitable(
                ["/about/", "/about"],
                "https://example.com/",
                "https://example.com/"
-             ) == ["https://example.com/about"]
+             ) == ["https://example.com/about/", "https://example.com/about"]
     end
 
     test "the documented trailing-slash choice keeps the site root as slash" do
@@ -176,24 +175,16 @@ defmodule Crawlview.UrlTest do
              ) == ["https://example.com/"]
     end
 
-    test "drops index.html so it deduplicates with its directory" do
+    test "keeps index.html, which is a guess about the server rather than a fact" do
       assert Url.visitable(
                ["/foo/index.html", "/foo/"],
                "https://example.com/",
                "https://example.com/"
-             ) == ["https://example.com/foo"]
-    end
-
-    test "drops index.htm so it deduplicates with its directory" do
-      assert Url.visitable(
-               ["/foo/index.htm", "/foo/"],
-               "https://example.com/",
-               "https://example.com/"
-             ) == ["https://example.com/foo"]
+             ) == ["https://example.com/foo/index.html", "https://example.com/foo/"]
     end
 
     test "keeps the first occurrence position when duplicate URLs are removed" do
-      hrefs = ["/first", "/same/", "/middle", "/same", "/last"]
+      hrefs = ["/first", "/same", "/middle", "/same", "/last"]
 
       assert Url.visitable(hrefs, "https://example.com/", "https://example.com/") == [
                "https://example.com/first",
@@ -299,7 +290,7 @@ defmodule Crawlview.UrlTest do
     @tag skip: "requires real external DNS"
     test "normalizes a well-formed public URL after DNS validation" do
       assert Url.public_http_url("HTTPS://EXAMPLE.COM:443/foo/index.html?b=2&a=1#top") ==
-               {:ok, "https://example.com/foo?a=1&b=2"}
+               {:ok, "https://example.com/foo/index.html?a=1&b=2"}
     end
   end
 end

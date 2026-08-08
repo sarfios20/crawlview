@@ -15,9 +15,15 @@ defmodule Crawlview.Url do
   """
   @spec visitable([String.t()], base :: String.t(), root :: String.t()) :: [String.t()]
   def visitable(hrefs, base, root) do
-    # Each returned string is the crawl-wide deduplication key. Consequently,
-    # every normalization rule here affects whether the crawler revisits a page
-    # or recognizes two references as the same page.
+    # Each returned string is the crawl-wide deduplication key, and that cuts both
+    # ways. Two URLs that fetch the same bytes must produce the same key, or the
+    # crawl visits one page twice. But two URLs that fetch DIFFERENT things must
+    # never collapse into one key, and that half is the dangerous one: collapsing
+    # `/a` with `/a/` on a server that redirects between them makes the redirect
+    # target identical to its own source, so the crawl sees a URL it has already
+    # visited, discards it, and simply stops going deeper. Normalization here is
+    # therefore deliberately conservative: only transformations that are true by
+    # specification, never ones that are merely usually true in practice.
     try do
       with %URI{} = base_uri <- parse_http_uri(base),
            %URI{host: root_host} <- parse_http_uri(root) do
@@ -74,15 +80,15 @@ defmodule Crawlview.Url do
              site_key(host) == site_key(root_host) and valid_port?(uri.port) and
              encoded_component?(uri.path) and encoded_component?(uri.query) and
              encoded_component?(uri.userinfo) do
-          # Emit the root's spelling of the host, not the link's. Once site_key/1
-          # has judged the two hosts to be the same site, keeping both spellings
-          # would hand the crawl two different deduplication keys for one page and
-          # break the invariant this function exists to uphold. The scheme is left
-          # as written, because http and https genuinely can serve different bytes
-          # and a redirect between them is information worth recording.
+          # The link keeps its OWN host. `www.` is ignored when deciding whether a
+          # URL belongs to this crawl, but it is not rewritten away: apex and `www`
+          # are different hosts that normally redirect to one another, and rewriting
+          # one into the other makes that redirect point at its own source, which
+          # ends the crawl on its first page. The redirect is the mechanism that
+          # settles which spelling is canonical, so it has to stay followable.
           uri
           |> Map.put(:scheme, scheme)
-          |> Map.put(:host, root_host)
+          |> Map.put(:host, host)
           |> Map.put(:port, canonical_port(scheme, uri.port))
           |> Map.put(:path, canonical_path(uri.path))
           |> Map.put(:query, canonical_query(uri.query))
@@ -130,24 +136,17 @@ defmodule Crawlview.Url do
   defp canonical_port("https", 443), do: nil
   defp canonical_port(_scheme, port), do: port
 
-  defp canonical_path(path) do
-    path =
-      case path do
-        nil -> "/"
-        "" -> "/"
-        value -> value
-      end
-
-    # Trailing-slash-stripped is the canonical form; the origin root remains
-    # "/" because an HTTP authority with no path denotes that same resource.
-    path = if path == "/", do: path, else: String.trim_trailing(path, "/")
-    path = Regex.replace(~r{/index\.html?$}, path, "")
-
-    case String.trim_trailing(path, "/") do
-      "" -> "/"
-      canonical -> canonical
-    end
-  end
+  # An absent path denotes the origin root, which "/" also denotes: that one is safe
+  # to canonicalize because it is true by specification.
+  #
+  # The trailing slash is left exactly as written, and so is `index.html`. Both were
+  # normalized away here at first, and both were wrong: servers routinely treat `/a`
+  # and `/a/` as different resources and redirect from one to the other, so folding
+  # them together destroys the crawler's ability to follow that redirect. A rule that
+  # is only usually true is not a normalization, it is a guess.
+  defp canonical_path(nil), do: "/"
+  defp canonical_path(""), do: "/"
+  defp canonical_path(path), do: path
 
   defp canonical_query(nil), do: nil
   defp canonical_query(""), do: nil
