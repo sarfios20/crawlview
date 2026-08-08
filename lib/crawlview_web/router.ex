@@ -20,10 +20,14 @@ defmodule CrawlviewWeb.Router do
     live "/", CrawlLive
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", CrawlviewWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", CrawlviewWeb do
+    pipe_through :api
+
+    post "/crawls", CrawlController, :create
+    get "/crawls/:id", CrawlController, :show
+    get "/crawls/:id/pages", CrawlController, :pages
+    delete "/crawls/:id", CrawlController, :delete
+  end
 
   # Enable LiveDashboard in development
   if Application.compile_env(:crawlview, :dev_routes) do
