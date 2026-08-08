@@ -197,8 +197,13 @@ to a person rather than defects:
   longer spending anyone's bandwidth.
 
 Options, all with defaults, all clamped server-side so a hostile client cannot ask for the moon:
-`max_pages` (200), `max_depth` (5), `concurrency` (8), `per_host` (2), `timeout_ms` (10_000),
-`budget_ms` (120_000).
+`max_pages` (200), `max_depth` (5), `concurrency` (8), `per_host` (3), `min_interval_ms` (350),
+`timeout_ms` (10_000), `budget_ms` (120_000).
+
+The pace comes from `min_interval_ms`, which gates request STARTS, so the rate is `1 / interval`
+whatever `per_host` allows. `per_host` exists to stop one slow page idling the crawl: measured on a
+fake site with a single three second page, a cap of 1 froze the screen for 3.35s while a cap of 3
+kept the rest arriving on schedule.
 
 ```elixir
 %Crawlview.Crawl.State{
@@ -256,7 +261,7 @@ point: collapsing them into one number would mean none of them could be reasoned
 
 | Limit | Protects | Where it lives |
 |---|---|---|
-| per-host in flight, and a floor between requests | the site being crawled | `Crawl.Server` |
+| a floor between request starts to one host, and a cap on how many are open | the site being crawled | `Crawl.Server` |
 | crawls fetching at once (`max_concurrent_crawls`) | every site, from being amplified | `Crawl.start/2` |
 | crawls started per client per window | fairness between visitors | `CrawlviewWeb.ClientLimit` |
 

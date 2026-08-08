@@ -15,16 +15,19 @@ defmodule Crawlview.Crawl.Server do
   @task_supervisor Crawlview.Crawl.TaskSupervisor
   @broken_outcomes [:not_found, :client_error, :server_error, :timeout, :unreachable]
 
-  # `per_host: 1` and a 350 ms floor between requests are a deliberate default, not a
-  # limitation. This crawl is watched while it happens, and pages landing four at a
-  # time faster than the eye follows defeats the point of watching. It is also the
-  # kinder default for the one server we are a guest on. A caller can raise both, and
-  # a site's own Crawl-delay still wins whenever it asks for more.
+  # The 350 ms floor is what sets the pace, and it is a deliberate default: this crawl
+  # gets watched while it happens, so pages have to arrive slowly enough to follow.
+  # A site's own Crawl-delay still wins whenever it asks for more room.
+  #
+  # `per_host` is a separate matter and does NOT affect the pace, because the floor
+  # applies to request STARTS. Its job is to stop one slow page from idling the crawl:
+  # at 1, a request that runs to its 10 second timeout freezes the whole picture and
+  # the person watching assumes something broke.
   @defaults %{
     max_pages: 200,
     max_depth: 5,
     concurrency: 8,
-    per_host: 1,
+    per_host: 3,
     min_interval_ms: 350,
     timeout_ms: 10_000,
     budget_ms: 120_000
@@ -66,12 +69,13 @@ defmodule Crawlview.Crawl.Server do
   #     report results; they never own or update crawler state.
   #   * `seen` is crawl-wide. A URL enters pages at most once, and the frontier
   #     contains no URL already visited or in flight.
-  #   * Host counts never exceed `per_host`, and total in-flight work never
-  #     exceeds `concurrency`. Worth knowing which one actually binds: because a
-  #     crawl stays on one site, every URL shares a host, so `per_host` is the
-  #     real throttle and `concurrency` is only the outer bound. That is the
-  #     intended order. Politeness to the one server we are a guest on decides
-  #     how fast we go, not how much parallelism the machine could afford.
+  #   * Host counts never exceed `per_host`, and total in-flight work never exceeds
+  #     `concurrency`. Neither of those is the throttle, though, and it is worth being
+  #     precise about it: `min_interval_ms` gates request STARTS, so the rate is
+  #     `1 / interval` no matter how many are allowed in flight. Throughput ends up as
+  #     min(1 / interval, per_host / latency), which means `per_host` only matters when
+  #     a server answers slower than the floor. Courtesy to the one server we are
+  #     visiting is what decides the pace.
   #   * Workers are supervised and unlinked. A crash or worker timeout loses one
   #     page, never the crawl.
   #   * Stopping preserves completed pages and only abandons queued/in-flight work.
