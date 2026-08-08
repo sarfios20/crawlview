@@ -109,6 +109,13 @@ defmodule CrawlviewWeb.CrawlLive do
     {:noreply,
      socket
      |> assign(:stats, stats)
+     # The depth-0 page IS the crawl's root, so it settles the host without needing a
+     # third kind of event. It matters because start/2 returns before the root is even
+     # fetched: a site that answers under another name (apex to www, or http to https)
+     # only reveals its real address once that first request comes back.
+     |> then(fn socket ->
+       if page.depth == 0, do: assign(socket, :root_url, page.url), else: socket
+     end)
      |> stream_insert(:pages, page, at: 0)
      |> push_event("site_graph:node", graph_node(page))}
   end
@@ -251,6 +258,7 @@ defmodule CrawlviewWeb.CrawlLive do
                 <tr
                   :for={{dom_id, page} <- @streams.pages}
                   id={dom_id}
+                  data-url={page.url}
                   data-outcome={page.outcome}
                   data-broken={to_string(broken?(page.outcome))}
                   class="record__row"
@@ -389,7 +397,13 @@ defmodule CrawlviewWeb.CrawlLive do
       url: page.url,
       depth: page.depth,
       referrer: page.referrer,
-      outcome: page.outcome
+      outcome: page.outcome,
+      # The words belong to the server, which already owns them for the table. Sending
+      # the label as well as the atom keeps the plot and the record saying the same
+      # thing about the same page, instead of one of them showing `not_found`.
+      outcome_label: outcome_label(page.outcome),
+      status: page.status,
+      title: page.title
     }
   end
 

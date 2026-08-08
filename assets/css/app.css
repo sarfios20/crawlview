@@ -563,6 +563,10 @@ body {
   align-items: stretch;
 }
 
+.plot__canvas-inner {
+  position: relative;
+}
+
 .plot__svg {
   display: block;
   width: 100%;
@@ -570,6 +574,145 @@ body {
   height: auto;
   margin-inline: auto;
   padding: 1.25rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Selection. Hovering or focusing a node traces its route back to the centre and
+   pushes everything else back, which answers the question the picture provokes:
+   how do I get to that one, and for a broken page, which page do I go and fix.
+   All of this is client-only. A round trip per mouse move would be absurd, and the
+   hook already holds the whole tree, so nothing here needs the server.
+   --------------------------------------------------------------------------- */
+
+.plot__edges line {
+  stroke: var(--plot-edge);
+  stroke-width: 1;
+}
+
+.plot__svg g[data-node] {
+  cursor: pointer;
+}
+
+.plot__svg g[data-node]:focus {
+  outline: none;
+}
+
+.plot__svg g[data-node]:focus-visible circle:first-of-type {
+  stroke: var(--color-primary);
+  stroke-width: 3;
+}
+
+/* While something is selected the rest of the plot recedes rather than disappears:
+   context is still worth seeing, just not competing. */
+.is-focused .plot__svg g[data-node] {
+  opacity: 0.28;
+  transition: opacity 140ms ease-out;
+}
+
+.is-focused .plot__svg g[data-node].is-chain {
+  opacity: 1;
+}
+
+.is-focused .plot__edges line {
+  stroke-opacity: 0.25;
+}
+
+.is-focused .plot__edges line.is-chain {
+  stroke: var(--color-primary);
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+
+.plot__svg g[data-node].is-focus circle:last-of-type {
+  r: 8;
+}
+
+/* The label is anchored to its node and offset, never pinned to the cursor. */
+.plot__tip {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, calc(-100% - 0.875rem));
+  min-width: 10rem;
+  max-width: 16rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--color-base-300);
+  border-left: 2px solid var(--color-primary);
+  background: var(--color-base-100);
+  box-shadow: 0 6px 20px -8px rgb(0 0 0 / 0.45);
+  pointer-events: none;
+}
+
+.plot__tip[data-below="true"] {
+  transform: translate(-50%, 0.875rem);
+}
+
+.plot__tip[data-pinned="true"] {
+  pointer-events: auto;
+}
+
+.plot__tip[data-broken="true"] {
+  border-left-color: var(--broken);
+}
+
+.plot__tip[hidden] {
+  display: none;
+}
+
+.tip__path {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.tip__title {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  color: color-mix(in oklab, var(--color-base-content) 66%, transparent);
+  /* The label sits over the plot it describes, so it stays small: two lines of title
+     is enough to recognise a page, and the full text is in the table. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tip__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: color-mix(in oklab, var(--color-base-content) 58%, transparent);
+}
+
+.tip__status {
+  font-family: var(--font-data);
+}
+
+.plot__tip[data-broken="true"] .tip__status {
+  color: var(--broken);
+}
+
+.tip__open {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+/* The row the plot is pointing at, and the reverse: hovering a row lights its node. */
+.record__row.is-linked td {
+  background: color-mix(in oklab, var(--color-primary) 14%, transparent);
+}
+
+.record__row.is-linked {
+  box-shadow: inset 2px 0 0 var(--color-primary);
+}
+
+.record__row[data-broken="true"].is-linked {
+  box-shadow: inset 2px 0 0 var(--broken);
 }
 
 /* The signature: a legend that is also the live tally and the depth distribution.
