@@ -12,7 +12,12 @@ defmodule CrawlviewWeb.CrawlController do
 
   alias Crawlview.Crawl
 
-  @crawl_options ~w(max_pages max_depth concurrency per_host timeout_ms budget_ms)a
+  # An explicit allowlist, not laziness: turning arbitrary client strings into atoms
+  # would be a memory-exhaustion vector, because atoms are never garbage collected.
+  # It does mean this list is a second copy of the domain's option names, so a new
+  # option has to be added here too — which is exactly how `min_interval_ms` was
+  # silently ignored by the API until someone noticed.
+  @crawl_options ~w(max_pages max_depth concurrency per_host min_interval_ms timeout_ms budget_ms)a
   @default_page_limit 100
   @maximum_page_limit 100
 

@@ -85,8 +85,6 @@ defmodule CrawlviewWeb.CrawlLive do
     start_crawl(socket, url)
   end
 
-  # Presets turn an otherwise blank first visit into a useful one-click trial;
-  # the reserved example domains are intentionally tiny and stable.
   def handle_event("start_preset", %{"url" => url}, socket) do
     start_crawl(socket, url)
   end
