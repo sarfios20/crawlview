@@ -62,8 +62,41 @@ defmodule CrawlviewWeb.CrawlLiveTest do
     assert has_element?(view, "#crawl-results")
     assert has_element?(view, "#crawl-stats")
     assert has_element?(view, "#stop-crawl")
+    assert has_element?(view, "#site-graph[phx-hook='SiteGraph'][phx-update='ignore']")
 
     view |> element("#stop-crawl") |> render_click()
+  end
+
+  test "a page event pushes the graph's minimum domain facts", %{conn: conn} do
+    hold_root_request()
+    {:ok, view, _html} = live(conn, ~p"/")
+
+    view
+    |> form("#crawl-form", crawl: %{url: "https://example.com/"})
+    |> render_submit()
+
+    _path = assert_patch(view)
+
+    page = %Page{
+      url: "https://example.com/about",
+      depth: 1,
+      referrer: "https://example.com/",
+      outcome: :ok,
+      status: 200,
+      title: "About",
+      links: [],
+      duration_ms: 8
+    }
+
+    stats = %Stats{started_at: DateTime.utc_now(), visited: 1, ok: 1}
+    send(view.pid, {:page, page, stats})
+
+    assert_push_event view, "site_graph:node", %{
+      url: "https://example.com/about",
+      depth: 1,
+      referrer: "https://example.com/",
+      outcome: :ok
+    }
   end
 
   test "stopping a running crawl replaces the button with a human sentence", %{conn: conn} do
@@ -109,6 +142,14 @@ defmodule CrawlviewWeb.CrawlLiveTest do
 
     stats = %Stats{started_at: DateTime.utc_now(), visited: 1, broken: 1}
     send(view.pid, {:page, page, stats})
+
+    assert_push_event view, "site_graph:node", %{
+      url: "https://example.com/missing",
+      depth: 1,
+      referrer: "https://example.com/",
+      outcome: :not_found
+    }
+
     _state = :sys.get_state(view.pid)
 
     assert has_element?(view, "#crawl-pages tr[data-outcome='not_found']")

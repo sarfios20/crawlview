@@ -1,6 +1,6 @@
 defmodule CrawlviewWeb.CrawlLive do
   @moduledoc """
-  Presents one crawl as a live, reload-safe table.
+  Presents one crawl as a live, reload-safe radial graph and table.
 
   Crawl ownership remains entirely in `Crawlview.Crawl`; this module keeps only
   form and presentation state and renders domain-provided pages and counters.
@@ -86,7 +86,8 @@ defmodule CrawlviewWeb.CrawlLive do
     {:noreply,
      socket
      |> assign(:stats, stats)
-     |> stream_insert(:pages, page, at: 0)}
+     |> stream_insert(:pages, page, at: 0)
+     |> push_event("site_graph:node", graph_node(page))}
   end
 
   def handle_info({:finished, stats, reason}, socket) do
@@ -208,7 +209,31 @@ defmodule CrawlviewWeb.CrawlLive do
             </div>
           </dl>
 
-          <div class="w-[min(94vw,72rem)] relative left-1/2 -translate-x-1/2 overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+          <figure
+            id="site-graph-panel"
+            class="overflow-hidden rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6"
+          >
+            <div class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 class="text-lg font-semibold text-base-content">Site shape</h2>
+                <p id="site-graph-description" class="text-sm text-base-content/60">
+                  Distance from the centre is click depth. The table below remains the complete accessible record.
+                </p>
+              </div>
+              <p class="text-xs font-medium text-error">
+                Ringed nodes are broken pages
+              </p>
+            </div>
+            <div
+              id="site-graph"
+              phx-hook="SiteGraph"
+              phx-update="ignore"
+              class="mx-auto w-full max-w-xl"
+            >
+            </div>
+          </figure>
+
+          <div class="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
             <div class="overflow-x-auto">
               <table class="table" aria-label="Crawled pages">
                 <thead class="bg-base-200/70">
@@ -301,17 +326,23 @@ defmodule CrawlviewWeb.CrawlLive do
     # is deterministic after reload; live arrivals are inserted newest-first.
     pages = state.pages |> Map.values() |> Enum.sort_by(& &1.url)
 
-    socket
-    |> assign(
-      form: crawl_form(state.root_url),
-      validation_error: nil,
-      crawl_notice: nil,
-      crawl_id: state.id,
-      status: state.status,
-      stats: state.stats,
-      finished_reason: state.finished_reason
-    )
-    |> stream(:pages, pages, reset: true)
+    socket =
+      socket
+      |> assign(
+        form: crawl_form(state.root_url),
+        validation_error: nil,
+        crawl_notice: nil,
+        crawl_id: state.id,
+        status: state.status,
+        stats: state.stats,
+        finished_reason: state.finished_reason
+      )
+      |> stream(:pages, pages, reset: true)
+      |> push_event("site_graph:reset", %{})
+
+    Enum.reduce(pages, socket, fn page, socket ->
+      push_event(socket, "site_graph:node", graph_node(page))
+    end)
   end
 
   defp unavailable_crawl(socket) do
@@ -338,7 +369,10 @@ defmodule CrawlviewWeb.CrawlLive do
 
   defp error_sentence(_reason), do: "That address cannot be crawled."
 
-  defp finished_sentence(:page_limit), do: "The crawl stopped at the 200-page limit."
+  # Deliberately does not name a number. The page limit is an option that callers
+  # can set and that the server then clamps, so any figure written here would be
+  # a lie for every crawl that did not use the default.
+  defp finished_sentence(:page_limit), do: "The crawl stopped at its page limit."
   defp finished_sentence(:time_limit), do: "The crawl ran out of its time budget."
   defp finished_sentence(:disallowed), do: "The site's robots.txt asked us not to crawl it."
   defp finished_sentence(:stopped), do: "You stopped the crawl. Pages already visited are kept."
@@ -359,6 +393,15 @@ defmodule CrawlviewWeb.CrawlLive do
   end
 
   defp broken?(outcome), do: outcome in @broken_outcomes
+
+  defp graph_node(page) do
+    %{
+      url: page.url,
+      depth: page.depth,
+      referrer: page.referrer,
+      outcome: page.outcome
+    }
+  end
 
   defp outcome_class(outcome) do
     [
