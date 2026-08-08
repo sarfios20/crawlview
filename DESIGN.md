@@ -1,8 +1,8 @@
 # Crawlview: design contract
 
-This document is the **single source of truth for module boundaries**. Every agent working on
-this repo reads it first and implements against it without renegotiating it. If you believe a
-contract here is wrong, say so in your report; do not silently change it.
+This document is the **single source of truth for module boundaries**, and it was written before
+the code. Anything here can be argued with, but not quietly: if a contract turns out to be wrong,
+the contract gets changed on purpose and the reason gets written down.
 
 ## What the product is
 
@@ -266,13 +266,11 @@ into the domain. And note which layer each error surfaces as: a full node is **5
 client did nothing wrong, while a client over its allowance is **429**. Both carry `Retry-After`,
 because a refusal without a next step is just a door.
 
-## Rules for agents working here
+## House rules
 
-- Implement **only** the files your task names. Do not touch `mix.exs`, `DESIGN.md` or another
-  agent's modules. Dependencies are already installed: `req` for HTTP, `floki` for HTML.
-- Every module gets `@moduledoc`, `@spec` on public functions, and ExUnit tests. Tests must not
-  hit the network: pass a stub, use `Req.Test`, or serve from a fixture.
-- `mix precommit` (compile with warnings as errors, format, test) must pass before you report done.
-- Do not commit. Report what you did and let the orchestrator verify and commit.
-- Delegate the actual writing of code to `codex exec` in small, well-scoped chunks, and review
-  what comes back against this document before accepting it.
+- Every module carries `@moduledoc`, `@spec` on its public functions, and ExUnit tests.
+- **No test touches the network.** Pass a stub plug, use `Req.Test`, or serve from a fixture.
+- `mix precommit` runs compile with warnings as errors, then format, then the suite. It has to
+  pass before anything lands.
+- HTTP goes through `req` and HTML through `floki`. Neither of those choices is worth revisiting
+  for a project this size.

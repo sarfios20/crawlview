@@ -35,3 +35,6 @@ crawlview-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Phoenix generates this as guidance for coding assistants. Useful locally, noise in a repo.
+AGENTS.md
