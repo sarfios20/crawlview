@@ -30,9 +30,9 @@ defmodule CrawlviewWeb.CrawlLiveTest do
 
     assert has_element?(view, "#crawl-form")
     assert has_element?(view, "#start-crawl")
-    assert has_element?(view, "#crawl-presets button", "The first website (1991)")
-    assert has_element?(view, "#crawl-presets button", "elixir-lang.org")
-    assert has_element?(view, "#crawl-presets button", "davidhaggstrom.dev")
+    assert has_element?(view, "#crawl-presets button", "The first website, 1991")
+    assert has_element?(view, "#crawl-presets button", "info.cern.ch")
+    assert has_element?(view, "#crawl-presets button", "A personal blog")
   end
 
   test "an invalid URL shows a useful error without starting a crawl", %{conn: conn} do
@@ -153,7 +153,8 @@ defmodule CrawlviewWeb.CrawlLiveTest do
     _state = :sys.get_state(view.pid)
 
     assert has_element?(view, "#crawl-pages tr[data-outcome='not_found']")
-    assert has_element?(view, "#crawl-pages tr[data-outcome='not_found']", "Broken · not found")
+    assert has_element?(view, "#crawl-pages tr[data-outcome='not_found']", "Not found")
+    assert has_element?(view, "#crawl-pages tr[data-broken='true']")
     assert has_element?(view, "#crawl-pages tr[data-outcome='not_found']", "404")
   end
 

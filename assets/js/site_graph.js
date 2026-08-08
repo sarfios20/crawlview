@@ -10,42 +10,100 @@ const BROKEN_OUTCOMES = new Set([
 ])
 
 const RING_SPACING = 52
-const VIEW_RADIUS = 300
 const COMFORTABLE_NODE_COUNT = 160
+
+// The ramp has six steps and a crawl may go deeper, so anything past the last step
+// wears it. Depth beyond five is rare and the exact figure still shows in the table.
+const RAMP_STEPS = 6
+const depthColor = depth => `var(--depth-${Math.min(depth, RAMP_STEPS - 1)})`
+
+const el = (tag, className, text) => {
+  const node = document.createElement(tag)
+  if (className) node.className = className
+  if (text !== undefined) node.textContent = text
+  return node
+}
+
+const svgEl = (tag, attributes = {}) => {
+  const node = document.createElementNS(SVG_NS, tag)
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value)
+  return node
+}
 
 const SiteGraph = {
   mounted() {
     this.nodes = new Map()
+    this.swept = false
 
-    this.svg = document.createElementNS(SVG_NS, "svg")
-    this.svg.setAttribute("viewBox", `${-VIEW_RADIUS} ${-VIEW_RADIUS} ${VIEW_RADIUS * 2} ${VIEW_RADIUS * 2}`)
-    this.svg.setAttribute("role", "img")
-    this.svg.setAttribute("aria-label", "Radial tree of crawled pages by link depth")
-    this.svg.setAttribute("aria-describedby", "site-graph-description")
-    this.svg.setAttribute("class", "block aspect-square w-full")
+    this.svg = svgEl("svg", {
+      role: "img",
+      "aria-label": "Radial plot of crawled pages by link depth",
+      "aria-describedby": "site-graph-description",
+      class: "plot__svg",
+    })
 
-    this.warning = document.createElement("p")
+    // The key is built here rather than server-side because this hook already holds
+    // every node: the per-depth tally is a property of the picture, so computing it
+    // here keeps the server from mirroring crawl state it does not own.
+    this.key = el("div", "plot__key")
+
+    this.warning = el("p", "plot__warning")
     this.warning.setAttribute("role", "status")
-    this.warning.setAttribute("class", "alert alert-warning mt-3 hidden text-sm")
+    this.warning.hidden = true
 
-    this.el.replaceChildren(this.svg, this.warning)
+    const figure = el("div", "plot__figure")
+    figure.append(this.svg, this.key)
+    this.el.replaceChildren(figure, this.warning)
 
     this.handleEvent(NODE_EVENT, node => {
       const isNew = !this.nodes.has(node.url)
       this.nodes.set(node.url, node)
-      this.renderGraph(isNew ? node.url : null)
+      this.render(isNew ? node.url : null)
     })
 
     this.handleEvent(RESET_EVENT, () => {
       this.nodes.clear()
-      this.renderGraph(null)
+      this.swept = false
+      this.render(null)
     })
 
-    this.renderGraph(null)
+    this.render(null)
   },
 
-  renderGraph(newUrl) {
+  render(newUrl) {
     const nodes = [...this.nodes.values()]
+    const tree = this.buildTree(nodes)
+    const positions = this.layout(tree)
+    const maximumDepth = nodes.reduce((maximum, node) => Math.max(maximum, node.depth), 0)
+
+    // The frame follows the tree instead of the tree sitting inside a fixed frame. A
+    // constant viewBox sized for the deepest crawl allowed would leave a shallow site
+    // as a small blob in a large empty box, so the radius comes from the depth
+    // actually reached, plus room for the outermost node and its focus ring.
+    const viewRadius = Math.max(maximumDepth, 1) * RING_SPACING + 26
+    this.svg.setAttribute(
+      "viewBox",
+      `${-viewRadius} ${-viewRadius} ${viewRadius * 2} ${viewRadius * 2}`
+    )
+
+    this.svg.replaceChildren(
+      this.drawRings(maximumDepth),
+      this.drawEdges(nodes, positions),
+      this.drawNodes(nodes, positions, newUrl)
+    )
+
+    this.drawKey(nodes, maximumDepth)
+
+    if (nodes.length > COMFORTABLE_NODE_COUNT) {
+      this.warning.textContent = `${nodes.length} pages plotted. The picture is getting dense; the table below stays readable.`
+      this.warning.hidden = false
+    } else {
+      this.warning.textContent = ""
+      this.warning.hidden = true
+    }
+  },
+
+  buildTree(nodes) {
     const byUrl = this.nodes
     const children = new Map(nodes.map(node => [node.url, []]))
     const roots = []
@@ -53,9 +111,10 @@ const SiteGraph = {
     for (const node of nodes) {
       const parent = node.referrer && byUrl.get(node.referrer)
 
-      // A referrer can arrive after its child. Until then that child is a
-      // top-level subtree with an edge to the centre; rebuilding this index on
-      // every event attaches it to its real parent as soon as that parent exists.
+      // A referrer can arrive after its child. Until then that child is a top-level
+      // subtree with an edge to the centre; rebuilding this index on every event
+      // attaches it to its real parent as soon as that parent exists, so a node is
+      // never dropped and the picture never breaks.
       if (parent && parent.url !== node.url) {
         children.get(parent.url).push(node)
       } else {
@@ -68,6 +127,10 @@ const SiteGraph = {
     }
     roots.sort((left, right) => left.url.localeCompare(right.url))
 
+    return {children, roots}
+  },
+
+  layout({children, roots}) {
     const weights = new Map()
     const subtreeWeight = node => {
       const childNodes = children.get(node.url)
@@ -79,11 +142,11 @@ const SiteGraph = {
 
     const positions = new Map()
 
-    // Coordinates are SVG user units: each depth adds one 52-unit ring. A
-    // recursive pass divides a parent's angular slice in proportion to its
-    // children's subtree sizes, keeping siblings fanned out and branches
-    // together. Recomputing all angles is clearer than incremental geometry and
-    // is comfortably fast for the crawler's 200-page cap.
+    // Radius is depth: each click from the front page adds one 52-unit ring. Angle is
+    // position within the parent's slice, divided in proportion to subtree size, so
+    // siblings fan out and a branch stays visually together. Recomputing every angle
+    // on each arrival is simpler to read than incremental geometry and easily fast
+    // enough at the page cap this crawler enforces.
     const positionSubtree = (node, sliceStart, sliceEnd) => {
       const angle = (sliceStart + sliceEnd) / 2
       const radius = node.depth * RING_SPACING
@@ -112,115 +175,191 @@ const SiteGraph = {
       rootCursor += width
     }
 
-    const ringLayer = document.createElementNS(SVG_NS, "g")
-    ringLayer.setAttribute("aria-hidden", "true")
-    ringLayer.setAttribute("fill", "none")
-    ringLayer.setAttribute("stroke", "var(--color-base-content)")
-    ringLayer.setAttribute("stroke-opacity", "0.12")
-    ringLayer.setAttribute("stroke-width", "1")
-    ringLayer.setAttribute("stroke-dasharray", "3 5")
+    return positions
+  },
 
-    const maximumDepth = nodes.reduce((maximum, node) => Math.max(maximum, node.depth), 0)
+  drawRings(maximumDepth) {
+    const sweep =
+      !this.swept &&
+      maximumDepth > 0 &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
-    // The frame follows the tree instead of the tree sitting inside a fixed
-    // frame. A constant viewBox sized for the deepest crawl we allow would leave
-    // a shallow site as a small blob in the middle of a large empty box, so the
-    // radius is recomputed from the depth actually reached, plus room for the
-    // outermost node's own radius and its focus ring.
-    const viewRadius = Math.max(maximumDepth, 1) * RING_SPACING + 24
-    this.svg.setAttribute(
-      "viewBox",
-      `${-viewRadius} ${-viewRadius} ${viewRadius * 2} ${viewRadius * 2}`
-    )
+    if (maximumDepth > 0) this.swept = true
+
+    const layer = svgEl("g", {
+      "aria-hidden": "true",
+      class: sweep ? "plot__rings--sweep" : "",
+    })
 
     for (let depth = 1; depth <= maximumDepth; depth += 1) {
-      const ring = document.createElementNS(SVG_NS, "circle")
-      ring.setAttribute("r", depth * RING_SPACING)
-      ringLayer.append(ring)
+      layer.append(
+        svgEl("circle", {
+          r: depth * RING_SPACING,
+          fill: "none",
+          stroke: "var(--plot-ring)",
+          "stroke-width": "1",
+          "stroke-dasharray": "2 6",
+        })
+      )
     }
 
-    const edgeLayer = document.createElementNS(SVG_NS, "g")
-    edgeLayer.setAttribute("aria-hidden", "true")
-    edgeLayer.setAttribute("fill", "none")
-    edgeLayer.setAttribute("stroke", "var(--color-base-content)")
-    edgeLayer.setAttribute("stroke-opacity", "0.24")
-    edgeLayer.setAttribute("stroke-width", "1.5")
+    // Range rings carry their own number, the way a contour carries its elevation.
+    // It means the reader learns the scale from the picture and not from prose.
+    for (let depth = 1; depth <= maximumDepth; depth += 1) {
+      const label = svgEl("text", {
+        x: 0,
+        y: -depth * RING_SPACING + 4,
+        "text-anchor": "middle",
+        fill: "var(--color-base-content)",
+        "fill-opacity": "0.4",
+        "font-size": "10",
+        "font-family": "var(--font-data)",
+      })
+      label.textContent = depth
+      layer.append(label)
+    }
+
+    return layer
+  },
+
+  drawEdges(nodes, positions) {
+    const layer = svgEl("g", {
+      "aria-hidden": "true",
+      fill: "none",
+      stroke: "var(--plot-edge)",
+      "stroke-width": "1",
+    })
 
     for (const node of nodes) {
       if (node.depth === 0) continue
 
       const point = positions.get(node.url)
       const parentPoint = node.referrer && positions.get(node.referrer)
-      const edge = document.createElementNS(SVG_NS, "line")
-      edge.setAttribute("x1", parentPoint ? parentPoint.x : 0)
-      edge.setAttribute("y1", parentPoint ? parentPoint.y : 0)
-      edge.setAttribute("x2", point.x)
-      edge.setAttribute("y2", point.y)
-      edgeLayer.append(edge)
+      layer.append(
+        svgEl("line", {
+          x1: parentPoint ? parentPoint.x : 0,
+          y1: parentPoint ? parentPoint.y : 0,
+          x2: point.x,
+          y2: point.y,
+        })
+      )
     }
 
-    const nodeLayer = document.createElementNS(SVG_NS, "g")
+    return layer
+  },
+
+  drawNodes(nodes, positions, newUrl) {
+    const layer = svgEl("g")
+    const stillMoving = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
     for (const node of nodes) {
       const point = positions.get(node.url)
-      const group = document.createElementNS(SVG_NS, "g")
-      group.setAttribute("transform", `translate(${point.x} ${point.y})`)
-      group.setAttribute("tabindex", "0")
-      group.setAttribute("aria-label", `${node.url}, depth ${node.depth}, outcome ${node.outcome}`)
+      const broken = BROKEN_OUTCOMES.has(node.outcome)
 
-      const title = document.createElementNS(SVG_NS, "title")
+      const group = svgEl("g", {
+        transform: `translate(${point.x} ${point.y})`,
+        tabindex: "0",
+        "aria-label": `${node.url}, depth ${node.depth}, ${node.outcome}`,
+      })
+
+      const title = svgEl("title")
       title.textContent = node.url
       group.append(title)
 
-      const visual = document.createElementNS(SVG_NS, "g")
-      const broken = BROKEN_OUTCOMES.has(node.outcome)
+      const visual = svgEl("g")
 
       if (broken) {
-        const ring = document.createElementNS(SVG_NS, "circle")
-        ring.setAttribute("r", "10")
-        ring.setAttribute("fill", "none")
-        ring.setAttribute("stroke", "var(--color-error)")
-        ring.setAttribute("stroke-width", "2.5")
-        visual.append(ring)
-
-        const circle = document.createElementNS(SVG_NS, "circle")
-        circle.setAttribute("r", "6.5")
-        circle.setAttribute("fill", "var(--color-error)")
-        circle.setAttribute("stroke", "var(--color-error-content)")
-        circle.setAttribute("stroke-width", "1")
-        visual.append(circle)
+        // Broken pages carry an outer ring as well as the reserved colour, so they
+        // stay identifiable in greyscale, in forced colours and to a colour-blind
+        // reader. The gap is painted in the surface so the ring reads as a halo.
+        visual.append(
+          svgEl("circle", {
+            r: "9.5",
+            fill: "none",
+            stroke: "var(--plot-surface)",
+            "stroke-width": "3",
+          }),
+          svgEl("circle", {
+            r: "9.5",
+            fill: "none",
+            stroke: "var(--broken)",
+            "stroke-width": "1.75",
+          }),
+          svgEl("circle", {r: "5", fill: "var(--broken)"})
+        )
       } else {
-        const circle = document.createElementNS(SVG_NS, "circle")
-        circle.setAttribute("r", node.depth === 0 ? "7" : "5")
-        circle.setAttribute("fill", "var(--color-primary)")
-        circle.setAttribute("stroke", "var(--color-primary-content)")
-        circle.setAttribute("stroke-width", "1")
-        visual.append(circle)
+        visual.append(
+          svgEl("circle", {
+            r: node.depth === 0 ? "8" : "5",
+            fill: depthColor(node.depth),
+            stroke: "var(--plot-surface)",
+            "stroke-width": "1.5",
+          })
+        )
       }
 
       group.append(visual)
-      nodeLayer.append(group)
+      layer.append(group)
 
-      if (node.url === newUrl && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      if (node.url === newUrl && stillMoving) {
         visual.animate(
           [
-            {opacity: 0, transform: "scale(0.35)"},
+            {opacity: 0, transform: "scale(0.3)"},
             {opacity: 1, transform: "scale(1)"},
           ],
-          {duration: 260, easing: "ease-out"},
+          {duration: 240, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)"}
         )
       }
     }
 
-    this.svg.replaceChildren(ringLayer, edgeLayer, nodeLayer)
+    return layer
+  },
 
-    if (nodes.length > COMFORTABLE_NODE_COUNT) {
-      this.warning.textContent = `This graph contains ${nodes.length} pages and is becoming dense. The table remains the readable record of every page.`
-      this.warning.classList.remove("hidden")
-    } else {
-      this.warning.textContent = ""
-      this.warning.classList.add("hidden")
+  // The key is legend, tally and distribution in one column: it names what the
+  // colours mean, counts what has been found, and shows where the site's weight
+  // sits. It is the thing that lets a stranger read the plot unaided.
+  drawKey(nodes, maximumDepth) {
+    const counts = new Array(maximumDepth + 1).fill(0)
+    let brokenCount = 0
+
+    for (const node of nodes) {
+      counts[node.depth] = (counts[node.depth] || 0) + 1
+      if (BROKEN_OUTCOMES.has(node.outcome)) brokenCount += 1
     }
+
+    const busiest = Math.max(1, ...counts)
+    const rows = el("div", "key__rows")
+
+    counts.forEach((count, depth) => {
+      const row = el("div", "key__row")
+      row.style.color = depthColor(depth)
+
+      const dot = el("span", "key__dot")
+      dot.style.background = depthColor(depth)
+
+      const bar = el("span", "key__bar")
+      bar.style.width = `${(count / busiest) * 100}%`
+
+      row.append(
+        dot,
+        el("span", "key__depth", `${depth}`),
+        bar,
+        el("span", "key__count", `${count}`)
+      )
+      rows.append(row)
+    })
+
+    const depths = el("div")
+    depths.append(el("p", "key__heading", "Clicks from front page"), rows)
+
+    const broken = el("div", "key__broken")
+    broken.append(
+      el("span", "key__broken-mark"),
+      el("span", "key__broken-label", "Broken"),
+      el("span", "key__broken-count", `${brokenCount}`)
+    )
+
+    this.key.replaceChildren(depths, broken)
   },
 }
 

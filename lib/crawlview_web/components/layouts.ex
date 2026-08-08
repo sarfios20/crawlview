@@ -35,29 +35,17 @@ defmodule CrawlviewWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar border-b border-base-300 px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex w-fit items-baseline gap-2">
-          <span class="text-base font-semibold tracking-tight">Crawlview</span>
-          <span class="text-xs text-base-content/50">see the shape of a website</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column items-center space-x-3 px-1">
-          <li>
-            <a href="https://github.com/sarfios20/crawlview" class="btn btn-ghost btn-sm">Source</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-        </ul>
-      </div>
+    <header class="chrome">
+      <%!-- The wordmark carries the name; the page's own headline carries the thesis.
+            A tagline here would say the same thing twice. --%>
+      <a href="/" class="chrome__mark">Crawlview</a>
+      <span class="chrome__spacer"></span>
+      <a href="https://github.com/sarfios20/crawlview" class="chrome__link">Source</a>
+      <.theme_toggle />
     </header>
 
-    <main class="px-4 py-10 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-5xl space-y-4">
-        {render_slot(@inner_block)}
-      </div>
+    <main class="shell">
+      {render_slot(@inner_block)}
     </main>
 
     <.flash_group flash={@flash} />
