@@ -77,15 +77,16 @@ defmodule Crawlview.Url do
         host = uri.host && String.downcase(uri.host)
 
         if scheme in ["http", "https"] and credible_host?(host) and
-             site_key(host) == site_key(root_host) and valid_port?(uri.port) and
+             host == root_host and valid_port?(uri.port) and
              encoded_component?(uri.path) and encoded_component?(uri.query) and
              encoded_component?(uri.userinfo) do
-          # The link keeps its OWN host. `www.` is ignored when deciding whether a
-          # URL belongs to this crawl, but it is not rewritten away: apex and `www`
-          # are different hosts that normally redirect to one another, and rewriting
-          # one into the other makes that redirect point at its own source, which
-          # ends the crawl on its first page. The redirect is the mechanism that
-          # settles which spelling is canonical, so it has to stay followable.
+          # Same site means the SAME HOST, exactly. Treating `www.x` and `x` as one site
+          # was convenient and was a hole: only the root's host is DNS-checked, so a page
+          # on a public host could link to its own `www` spelling, that name could resolve
+          # somewhere private, and the crawl would fetch it unvalidated. Being strict here
+          # is what makes the security claim true rather than nearly true. The real-world
+          # case of a site answering under two names is handled where it belongs, by the
+          # root following its own redirect, and that path does validate the new name.
           uri
           |> Map.put(:scheme, scheme)
           |> Map.put(:host, host)
@@ -102,12 +103,6 @@ defmodule Crawlview.Url do
       _, _ -> nil
     end
   end
-
-  # A leading www. is ignored for crawl membership so apex/www redirects do
-  # not split a typical site. This can rarely conflate genuinely distinct
-  # services on those two hosts, an accepted tradeoff for this crawler's scope.
-  defp site_key("www." <> host), do: host
-  defp site_key(host), do: host
 
   defp credible_host?(host) when is_binary(host) do
     cond do

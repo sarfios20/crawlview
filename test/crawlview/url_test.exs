@@ -87,24 +87,38 @@ defmodule Crawlview.UrlTest do
              ) == []
     end
 
-    test "apex and www count as the same site, so neither is filtered out" do
+    test "the www spelling is a different host, so it is not same-site" do
+      # Deliberately strict, and it is a security property rather than pedantry. Only the
+      # root's host is DNS-checked, so if `www.x` counted as `x` then a page on a public
+      # host could link to its own www spelling, that name could resolve to something
+      # private, and the crawl would fetch it having validated nothing. A site that
+      # answers under two names is handled by the root following its own redirect, and
+      # that path does validate the name it adopts.
       assert Url.visitable(
                ["https://www.example.com/about"],
                "https://example.com/",
                "https://example.com/"
-             ) == ["https://www.example.com/about"]
-    end
+             ) == []
 
-    test "a same-site link keeps its own host rather than the root's spelling" do
-      # Rewriting www into apex (or back) makes a redirect between the two point at
-      # its own source, and the crawl then discards it as already-seen and stops on
-      # its first page. The redirect is what settles which spelling is canonical, so
-      # the two hosts must stay distinguishable here.
       assert Url.visitable(
-               ["https://example.com/a", "https://www.example.com/a"],
+               ["https://example.com/about"],
                "https://www.example.com/",
                "https://www.example.com/"
-             ) == ["https://example.com/a", "https://www.example.com/a"]
+             ) == []
+    end
+
+    test "every URL it returns carries the root's exact host" do
+      # The invariant the whole SSRF argument rests on: nothing is ever fetched whose host
+      # is not the one that was already checked.
+      urls =
+        Url.visitable(
+          ["/a", "https://example.com/b", "//example.com/c", "https://other.example/d"],
+          "https://example.com/",
+          "https://example.com/"
+        )
+
+      assert Enum.all?(urls, &(URI.parse(&1).host == "example.com"))
+      assert length(urls) == 3
     end
 
     test "lowercases the scheme and host" do

@@ -71,10 +71,18 @@ result: `mailto:`, `tel:`, `javascript:`, other hosts, other schemes, fragments-
 malformed values. **There is no error return and no rejection reason.** A caller cannot forget a
 check because there is no check to remember.
 
-Normalization: resolve against `base`, drop the fragment, lowercase scheme and host, drop default
-ports, sort query parameters, treat `/path` and `/path/` as the same URL, drop `index.html`.
-Two URLs that fetch the same bytes must normalize to the same string, because this string is the
-deduplication key for the whole crawl.
+Normalization is deliberately **conservative**: resolve against `base`, drop the fragment,
+lowercase scheme and host, drop default ports, sort query parameters. That is all, and the
+omissions matter. `/path` and `/path/` are NOT merged, and `index.html` is NOT dropped, because
+servers routinely treat those as different resources and redirect between them.
+
+The invariant cuts both ways, and the second half is the dangerous one. Two URLs that fetch the
+same bytes must produce the same key, or a page gets crawled twice. But two URLs that fetch
+DIFFERENT things must never collapse: merging `/a` with `/a/` makes a redirect target identical to
+its own source, so the crawl discards it as already-visited and silently stops going deeper. A
+rule that is only usually true is not a normalization, it is a guess.
+
+Same-site means the **same host, exactly**. `www.example.com` is not `example.com` here.
 
 ```elixir
 @spec public_http_url(String.t()) :: {:ok, String.t()} | {:error, atom()}
@@ -85,9 +93,11 @@ validates human input and the human needs to be told why. Used exactly once per 
 typed into the form. Rejects: non-http(s) schemes, hosts that do not resolve, and any host
 resolving to a loopback, link-local, private or reserved address.
 
-> Why this closes SSRF for the whole system: the root is validated once here, and `visitable/3`
-> only ever yields same-site URLs. So no crawl can reach an address the root did not already
-> resolve to. Note in a comment that DNS rebinding is knowingly out of scope.
+> Why this closes SSRF for the whole system: every URL a crawl fetches has the root's exact host,
+> and that host was validated here. The one exception is a root that redirects to another name for
+> itself, and that path runs the new name through this same function before adopting it. So no
+> crawl reaches a host that has not passed this gate. DNS rebinding is knowingly out of scope and
+> said so in a comment.
 
 ### `Crawlview.Extractor` (pure)
 

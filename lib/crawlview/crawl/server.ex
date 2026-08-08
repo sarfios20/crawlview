@@ -246,9 +246,15 @@ defmodule Crawlview.Crawl.Server do
   defp rebase_target(data, %{depth: 0}, %Fetcher.Result{outcome: :redirect} = result) do
     root = data.public.root_url
 
-    case Url.visitable([result.redirect_to], root, root) do
-      [target] -> if same_resource_renamed?(root, target), do: target
-      _offsite -> nil
+    # public_http_url/1 is the same gate the typed-in address goes through, so a root
+    # that redirects somewhere private is refused exactly as if it had been typed. This
+    # is the only place a crawl adopts a host it was not given, and it is validated.
+    with target when is_binary(target) <- result.redirect_to,
+         {:ok, canonical} <- Url.public_http_url(target),
+         true <- same_resource_renamed?(root, canonical) do
+      canonical
+    else
+      _not_a_rename -> nil
     end
   end
 

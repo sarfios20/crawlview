@@ -216,6 +216,23 @@ defmodule Crawlview.CrawlTest do
     assert Crawl.snapshot(crawl.id) == :not_found
   end
 
+  test "a root redirecting to a private address is not adopted" do
+    # The one place a crawl adopts a host it was not given. If that adoption skipped the
+    # public-address check, "crawl my site" could be answered with a redirect to something
+    # on the server's own network, which is the whole SSRF problem wearing a hat.
+    site = %{
+      "/robots.txt" => robots("User-agent: crawlview\nAllow: /"),
+      "/" => redirect("http://127.0.0.1/admin")
+    }
+
+    crawl = crawl(site)
+
+    assert crawl.snapshot.root_url == @root
+    assert %{outcome: :redirect, depth: 0} = crawl.snapshot.pages[@root]
+    # Recorded as an ordinary redirect and gone no further: nothing on 127.0.0.1 was asked for.
+    assert map_size(crawl.snapshot.pages) == 1
+  end
+
   test "a redirect that only adds a trailing slash is followed to the real page" do
     # The regression that made an ordinary blog uncrawlable. The server answers /a
     # with a redirect to /a/, so if those two normalize to one key the target looks
