@@ -73,9 +73,16 @@ defmodule Crawlview.Fetcher do
     # wall-clock corrections such as NTP adjustments or daylight-saving changes.
     started_at = System.monotonic_time(:millisecond)
 
+    # Option validation happens OUTSIDE the rescue below, and deliberately raises.
+    # Totality is a promise about the network, not a promise to swallow programmer
+    # error: a caller passing timeout_ms: "10s" has a bug, and reporting it as an
+    # unreachable host would hide that bug behind a plausible-looking result.
+    timeout_ms = positive_integer_option!(opts, :timeout_ms, @default_timeout_ms)
+    max_bytes = non_negative_integer_option!(opts, :max_bytes, @default_max_bytes)
+
     result =
       try do
-        do_fetch(url, opts)
+        do_fetch(url, opts, timeout_ms, max_bytes)
       rescue
         _exception -> transport_result(:unreachable)
       catch
@@ -85,10 +92,7 @@ defmodule Crawlview.Fetcher do
     %{result | duration_ms: elapsed_ms(started_at)}
   end
 
-  defp do_fetch(url, opts) do
-    timeout_ms = positive_integer_option!(opts, :timeout_ms, @default_timeout_ms)
-    max_bytes = non_negative_integer_option!(opts, :max_bytes, @default_max_bytes)
-
+  defp do_fetch(url, opts, timeout_ms, max_bytes) do
     request_options = [
       url: url,
       method: :get,

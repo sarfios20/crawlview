@@ -208,10 +208,19 @@ defmodule Crawlview.FetcherTest do
       assert %Result{} = Fetcher.fetch("http://127.0.0.1:1", timeout_ms: 100)
     end
 
-    test "returns a Result for an invalid timeout option" do
+    test "raises on an invalid option rather than reporting it as a failed fetch" do
+      # Totality is a promise about the network, not a promise to swallow caller
+      # bugs. A bad option is a defect in the calling code, and disguising it as
+      # an unreachable host would hide it behind a plausible-looking Result.
       plug = fn conn -> Req.Test.html(conn, "<html></html>") end
 
-      assert %Result{} = Fetcher.fetch(@url, timeout_ms: "not a number", plug: plug)
+      assert_raise ArgumentError, fn ->
+        Fetcher.fetch(@url, timeout_ms: "not a number", plug: plug)
+      end
+
+      assert_raise ArgumentError, fn ->
+        Fetcher.fetch(@url, max_bytes: -1, plug: plug)
+      end
     end
   end
 

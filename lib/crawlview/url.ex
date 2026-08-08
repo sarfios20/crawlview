@@ -21,11 +21,9 @@ defmodule Crawlview.Url do
     try do
       with %URI{} = base_uri <- parse_http_uri(base),
            %URI{host: root_host} <- parse_http_uri(root) do
-        root_key = site_key(root_host)
-
         {urls, _seen} =
           Enum.reduce(hrefs, {[], MapSet.new()}, fn href, {urls, seen} ->
-            case canonical_url(href, base_uri, root_key) do
+            case canonical_url(href, base_uri, root_host) do
               nil ->
                 {urls, seen}
 
@@ -61,7 +59,7 @@ defmodule Crawlview.Url do
     end
   end
 
-  defp canonical_url(href, base_uri, root_key) do
+  defp canonical_url(href, base_uri, root_host) do
     try do
       trimmed = String.trim(href)
 
@@ -73,12 +71,18 @@ defmodule Crawlview.Url do
         host = uri.host && String.downcase(uri.host)
 
         if scheme in ["http", "https"] and credible_host?(host) and
-             site_key(host) == root_key and valid_port?(uri.port) and
+             site_key(host) == site_key(root_host) and valid_port?(uri.port) and
              encoded_component?(uri.path) and encoded_component?(uri.query) and
              encoded_component?(uri.userinfo) do
+          # Emit the root's spelling of the host, not the link's. Once site_key/1
+          # has judged the two hosts to be the same site, keeping both spellings
+          # would hand the crawl two different deduplication keys for one page and
+          # break the invariant this function exists to uphold. The scheme is left
+          # as written, because http and https genuinely can serve different bytes
+          # and a redirect between them is information worth recording.
           uri
           |> Map.put(:scheme, scheme)
-          |> Map.put(:host, host)
+          |> Map.put(:host, root_host)
           |> Map.put(:port, canonical_port(scheme, uri.port))
           |> Map.put(:path, canonical_path(uri.path))
           |> Map.put(:query, canonical_query(uri.query))

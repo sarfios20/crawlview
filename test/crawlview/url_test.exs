@@ -92,7 +92,24 @@ defmodule Crawlview.UrlTest do
                ["https://www.example.com/about"],
                "https://example.com/",
                "https://example.com/"
-             ) == ["https://www.example.com/about"]
+             ) == ["https://example.com/about"]
+    end
+
+    test "a same-site link is rewritten to the root's spelling of the host" do
+      # Having judged www and apex to be one site, emitting both spellings would
+      # give the crawl two deduplication keys for a single page. The root's
+      # spelling wins, in both directions.
+      assert Url.visitable(
+               ["https://example.com/a", "https://www.example.com/a"],
+               "https://www.example.com/",
+               "https://www.example.com/"
+             ) == ["https://www.example.com/a"]
+
+      assert Url.visitable(
+               ["https://www.example.com/a", "https://example.com/a"],
+               "https://example.com/",
+               "https://example.com/"
+             ) == ["https://example.com/a"]
     end
 
     test "lowercases the scheme and host" do
