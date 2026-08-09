@@ -51,6 +51,7 @@ repo. The short version:
 ```
 Crawlview.Crawl        the deep module: four public functions, eight concerns hidden
   ├─ Crawl.Server      one GenServer per crawl. THE single writer.
+  ├─ Crawl.Frontier    pure: what to start next, and when. Its clock is an argument.
   └─ workers           supervised, monitored, NOT linked. A crash loses one page.
 
 Crawlview.Fetcher      HTTP: url in, bytes out. Total function: never raises, never errors.
@@ -59,8 +60,10 @@ Crawlview.Url          pure: what counts as a visitable URL, and the canonical f
 Crawlview.Robots       a crawl-scoped policy value. Not a process.
 ```
 
-Dependencies point one way. The four leaf modules know nothing about each other and nothing about
-crawling; `Crawl` is the pipe that joins them. Nothing depends on `Crawl` except the web layer,
+Dependencies point one way. The leaf modules know nothing about each other and nothing about
+crawling, with one exception written down on purpose: `Robots` fetches through `Fetcher`, because
+one module speaks HTTP and the alternative was a second one quietly opening its own connections.
+`Crawl` is the pipe that joins them. Nothing depends on `Crawl` except the web layer,
 and the web layer can only reach it through those four functions.
 
 The whole public interface of the crawler is:
@@ -90,10 +93,12 @@ elsewhere:
 
 ### Politeness is the throttle
 
-There are two limits, and it is worth knowing which one binds. Because a crawl never leaves one
-site, every URL shares a host, so the **per-host** limit is the real throttle and the global one
-is just the outer bound. That ordering is deliberate: how fast we go is decided by courtesy to
-the one server we are visiting, not by how much parallelism the machine could afford.
+There are several limits and it is worth knowing which one actually binds, because it is not the
+one people assume. A minimum interval of 350 ms gates request **starts**, so the rate is one per
+interval no matter how many requests are allowed in flight. The per-host limit of 3 is not a
+throttle at all: it exists so that one page that takes its full ten-second timeout cannot freeze
+the picture of a crawl somebody is watching. How fast we go is decided by courtesy to the one
+server we are visiting, not by how much parallelism the machine could afford.
 
 `robots.txt` is respected, including `Crawl-delay`. A missing `robots.txt` is not an error, it is
 permission.
@@ -103,9 +108,12 @@ permission.
 The URL you type is the only untrusted input, and it is validated exactly once, by
 `Url.public_http_url/1`: http(s) only, must resolve, and rejected if it resolves to a loopback,
 link-local, private, carrier-NAT, multicast or reserved address, including IPv4-mapped IPv6
-addresses. Every URL discovered afterwards is same-site by construction, and is rewritten to the
-root's own spelling of the host, so a crawl cannot reach an address the root did not already
-resolve to.
+addresses. Same-site then means the **same host, exactly**: `www.example.com` is not
+`example.com` here, because treating them as one site would let a page smuggle in a name that
+nobody resolved. The one case where a crawl adopts a host it was not given is a root that
+redirects to another name for itself, and that name goes through the same gate before it is
+adopted. `robots.txt` is fetched through the same hardened path as every page, and its redirects
+are followed only while the host does not change.
 
 DNS rebinding is knowingly out of scope, and said so in the code rather than left for you to
 wonder about.

@@ -120,11 +120,11 @@ URLs, sites or crawling: it reads a document and reports what it says.
 
 %Crawlview.Fetcher.Result{
   outcome:      :ok | :redirect | :not_found | :client_error | :server_error
-              | :timeout | :unreachable | :not_html | :too_large,
+              | :timeout | :unreachable | :unacceptable_type | :too_large,
   status:       pos_integer() | nil,   # nil when no HTTP response was received at all
   content_type: String.t() | nil,
   redirect_to:  String.t() | nil,      # absolute, when outcome == :redirect
-  body:         binary() | nil,        # nil unless outcome == :ok and body is HTML
+  body:         binary() | nil,        # nil unless outcome == :ok
   duration_ms:  non_neg_integer()
 }
 ```
@@ -141,19 +141,27 @@ both places would mean neither place owned it; validating only at the boundary k
 promise unqualified and keeps bad configuration from being silently absorbed deep in the system.
 
 Does not follow redirects itself (it reports them; the crawl decides). Caps body size. Sends a
-`User-Agent` identifying the tool with the project URL. Fetches only HTML: bails on other
-content types after headers where possible.
+`User-Agent` identifying the tool with the project URL. The caller says which media types it
+accepts, and an unwanted one bails after headers where possible; the crawl asks for `text/html`,
+and `Robots` asks for anything. Deciding what counts as an interesting document is the caller's
+business, not the transport's, and the day this module knew the answer itself was the day a
+second caller could not use it and opened its own connections instead.
 
 ### `Crawlview.Robots`
 
 ```elixir
+@spec parse(binary()) :: t()                       # pure: unreadable bytes => allow all
+@spec permissive() :: t()
 @spec load(root_url :: String.t()) :: t()          # never fails: no robots.txt => allow all
 @spec allowed?(t(), url :: String.t()) :: boolean()
 @spec crawl_delay(t()) :: non_neg_integer()        # milliseconds, 0 when unspecified
 ```
 
-`load/1` does the single network call, once per crawl, at start. `allowed?/2` is then pure and
-cheap. An opaque value, not a process: no global cache to invalidate, trivially testable.
+`parse/1` is the pure core and needs no seam of any kind to test. `load/1` is the shell around it:
+one fetch, once per crawl, at start, through `Fetcher` like everything else that speaks HTTP. It
+follows a redirect only while the host stays exactly the same, because the root host is the only
+name that `Url.public_http_url/1` ever validated. An opaque value, not a process: no global cache
+to invalidate.
 
 ### `Crawlview.Page` and `Crawlview.Stats` (structs)
 
