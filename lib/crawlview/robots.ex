@@ -4,15 +4,19 @@ defmodule Crawlview.Robots do
 
   This is intentionally a small robots.txt subset. It does not implement `*` or
   `$` wildcards in rule paths, `Sitemap:`, `Request-rate`, user-agent wildcard
-  patterns other than the literal `*`, or encoding/BOM handling beyond what Req
-  provides. Rules are literal path-prefix matches.
+  patterns other than the literal `*`, or encoding/BOM handling. Rules are
+  literal path-prefix matches.
 
   A missing robots.txt is a normal, common, meaningful absence, not a failure:
   most sites do not publish one. Consequently all fetch, status, and parse
   problems produce the same permissive policy as an absent file.
   """
 
+  alias Crawlview.Fetcher
+  alias Crawlview.Fetcher.Result
+
   @crawler_token "crawlview"
+  @max_redirects 3
 
   @opaque t() :: %__MODULE__{
             rules: [{:allow | :disallow, String.t()}],
@@ -27,21 +31,13 @@ defmodule Crawlview.Robots do
   This function always returns a policy. Missing files, non-200 responses,
   transport errors, and bodies that cannot be parsed all return a permissive
   policy.
-
-  The public API deliberately remains the three functions in this module. Tests
-  can stub the single request by temporarily setting Req's default `:plug`
-  option to a `Req.Test` plug; `Req.get/1` merges those defaults. That provides a
-  network seam without exposing the parser or adding options to the policy API.
   """
   @spec load(root_url :: String.t()) :: t()
   def load(root_url) do
     try do
-      with {:ok, robots_url} <- robots_url(root_url),
-           {:ok, %Req.Response{status: 200, body: body}} <- Req.get(url: robots_url),
-           {:ok, policy} <- parse(body) do
-        policy
-      else
-        _reason -> permissive()
+      case robots_url(root_url) do
+        {:ok, robots_url} -> load_url(robots_url, @max_redirects)
+        _invalid_url -> permissive()
       end
     rescue
       _exception -> permissive()
@@ -49,6 +45,46 @@ defmodule Crawlview.Robots do
       _kind, _reason -> permissive()
     end
   end
+
+  @doc """
+  Parses a robots.txt body into a policy.
+
+  Unsupported or malformed content is interpreted leniently. Non-binary input
+  returns the same permissive policy as an absent robots.txt.
+  """
+  @spec parse(binary()) :: t()
+  def parse(body) when is_binary(body) do
+    try do
+      do_parse(body)
+    rescue
+      _exception -> permissive()
+    catch
+      _kind, _reason -> permissive()
+    end
+  end
+
+  def parse(_body), do: permissive()
+
+  defp do_parse(body) do
+    groups =
+      body
+      |> String.split(~r/\r\n|\n|\r/)
+      |> Enum.reduce({[], nil}, &parse_line/2)
+      |> finish_groups()
+
+    group =
+      Enum.find(groups, &(@crawler_token in &1.agents)) ||
+        Enum.find(groups, &("*" in &1.agents))
+
+    case group do
+      nil -> permissive()
+      selected -> %__MODULE__{rules: selected.rules, crawl_delay_ms: selected.delay_ms}
+    end
+  end
+
+  @doc "Returns a policy that permits every URL with no crawl delay."
+  @spec permissive() :: t()
+  def permissive, do: %__MODULE__{}
 
   @doc """
   Returns whether `url` is permitted by the loaded policy.
@@ -76,7 +112,37 @@ defmodule Crawlview.Robots do
   @spec crawl_delay(t()) :: non_neg_integer()
   def crawl_delay(%__MODULE__{crawl_delay_ms: delay}), do: delay
 
-  defp permissive, do: %__MODULE__{}
+  defp load_url(url, redirects_left) do
+    # Unlike ["text/plain"], :any accepts misleading or missing media types at
+    # this well-known path; lenient parsing and the byte cap are what protect us.
+    case Fetcher.fetch(url, accept: :any, max_bytes: 512_000) do
+      %Result{outcome: :ok, body: body} ->
+        parse(body)
+
+      %Result{outcome: :redirect, redirect_to: target}
+      when redirects_left > 0 ->
+        if safe_redirect?(url, target) do
+          load_url(target, redirects_left - 1)
+        else
+          permissive()
+        end
+
+      _other_outcome ->
+        permissive()
+    end
+  end
+
+  defp safe_redirect?(requested_url, target_url) do
+    with %URI{host: requested_host} when is_binary(requested_host) <- URI.parse(requested_url),
+         %URI{scheme: scheme, host: target_host}
+         when scheme in ["http", "https"] and is_binary(target_host) <- URI.parse(target_url) do
+      # Only the root host passed Url.public_http_url/1; another name could resolve
+      # to an address that nobody validated, the same hole exact-host scoping closes.
+      String.downcase(requested_host) == String.downcase(target_host)
+    else
+      _invalid_url -> false
+    end
+  end
 
   defp robots_url(root_url) when is_binary(root_url) do
     case URI.parse(root_url) do
@@ -96,25 +162,6 @@ defmodule Crawlview.Robots do
   end
 
   defp robots_url(_root_url), do: :error
-
-  defp parse(body) when is_binary(body) do
-    groups =
-      body
-      |> String.split(~r/\r\n|\n|\r/)
-      |> Enum.reduce({[], nil}, &parse_line/2)
-      |> finish_groups()
-
-    group =
-      Enum.find(groups, &(@crawler_token in &1.agents)) ||
-        Enum.find(groups, &("*" in &1.agents))
-
-    case group do
-      nil -> {:ok, permissive()}
-      selected -> {:ok, %__MODULE__{rules: selected.rules, crawl_delay_ms: selected.delay_ms}}
-    end
-  end
-
-  defp parse(_body), do: :error
 
   defp parse_line(line, state) do
     line =

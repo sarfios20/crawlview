@@ -49,13 +49,17 @@ Crawlview.Crawl        deep module, the only public entry point   (stateful, OTP
 Crawlview.Fetcher      HTTP: URL in, bytes out. Never raises, never errors.
 Crawlview.Extractor    pure: HTML in, title + hrefs out.
 Crawlview.Url          pure: what is a visitable URL for this crawl.
-Crawlview.Robots       crawl-scoped robots.txt policy value.
+Crawlview.Robots       crawl-scoped robots.txt policy value. `parse/1` is pure.
 Crawlview.Page         struct: one visited URL and everything known about it.
 Crawlview.Stats        struct: counters for one crawl.
 ```
 
-Dependencies point one way only: `Crawl` → {`Fetcher`, `Extractor`, `Url`, `Robots`}. The leaves
-depend on nothing of ours. There is **no** module that depends on `Crawl` other than the web layer.
+Dependencies point one way only: `Crawl` → {`Extractor`, `Url`, `Robots`} → `Fetcher`. `Robots` is
+the single leaf with a dependency of its own, and that is deliberate rather than tolerated: robots.txt
+arrives over the network, and the alternative was letting a second module open its own connections.
+It did, once, and the hardening that lives in `Fetcher` (no redirects followed, no retries, a byte
+cap, a timeout, our User-Agent) silently did not apply to it. One module speaks HTTP. Everything else
+is a pure leaf. There is **no** module that depends on `Crawl` other than the web layer.
 
 ## Contracts
 
