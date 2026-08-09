@@ -13,7 +13,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Elixir and Erlang/OTP
         uses: erlef/setup-beam@v1
@@ -22,7 +22,7 @@ jobs:
           otp-version: "29.0.1"
 
       - name: Cache dependencies and build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             deps
@@ -33,7 +33,7 @@ jobs:
             ${{ runner.os }}-mix-elixir-1.20.0-otp-29.0.1-
 
       - name: Cache Dialyzer PLT
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: _build/plts
           key: ${{ runner.os }}-dialyzer-elixir-1.20.0-otp-29.0.1-${{ hashFiles('mix.lock') }}
