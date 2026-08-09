@@ -43,7 +43,8 @@ Concretely, in this repo that means:
 ```
 Crawlview.Crawl        deep module, the only public entry point   (stateful, OTP)
   ├─ Crawl.Supervisor  DynamicSupervisor, one child tree per crawl
-  ├─ Crawl.Server      GenServer: owns frontier + results. SINGLE WRITER.
+  ├─ Crawl.Server      GenServer: owns scheduling plumbing + results. SINGLE WRITER.
+  ├─ Crawl.Frontier    pure: queue order, deduplication, host slots + pacing.
   └─ Crawl.Worker      Task: fetch one URL, hand result back. Crash-isolated.
 
 Crawlview.Fetcher      HTTP: URL in, bytes out. Never raises, never errors.

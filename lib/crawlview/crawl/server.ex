@@ -9,7 +9,7 @@ defmodule Crawlview.Crawl.Server do
   use GenServer
 
   alias Crawlview.{Extractor, Fetcher, Page, Robots, Stats, Url}
-  alias Crawlview.Crawl.State
+  alias Crawlview.Crawl.{Frontier, State}
 
   @registry Crawlview.Crawl.Registry
   @task_supervisor Crawlview.Crawl.TaskSupervisor
@@ -87,12 +87,9 @@ defmodule Crawlview.Crawl.Server do
 
   defstruct public: nil,
             opts: nil,
-            frontier: :queue.new(),
-            seen: MapSet.new(),
+            frontier: nil,
             robots: nil,
             in_flight: %{},
-            host_counts: %{},
-            next_host_start: %{},
             started_monotonic_ms: nil,
             rebases_left: nil,
             expiry_timer: nil,
@@ -120,6 +117,7 @@ defmodule Crawlview.Crawl.Server do
     started_at = DateTime.utc_now()
     root = %{url: root_url, depth: 0, referrer: nil}
     stats = %Stats{started_at: started_at, queued: 1}
+    opts = clamp_options(raw_opts)
 
     public = %State{
       id: id,
@@ -132,9 +130,8 @@ defmodule Crawlview.Crawl.Server do
 
     data = %__MODULE__{
       public: public,
-      opts: clamp_options(raw_opts),
-      frontier: :queue.in(root, :queue.new()),
-      seen: MapSet.new([root_url]),
+      opts: opts,
+      frontier: Frontier.new(root, opts.per_host),
       rebases_left: @max_root_rebases,
       started_monotonic_ms: now_ms()
     }
@@ -160,7 +157,7 @@ defmodule Crawlview.Crawl.Server do
       # A site that forbids us gets its own finishing reason. Reporting this as
       # :completed would be technically true and useless: the person watching
       # would see an empty screen and no reason for it.
-      data = %{data | frontier: :queue.new()} |> put_queue_count(0)
+      data = %{data | frontier: Frontier.clear(data.frontier)} |> put_queue_count(0)
       {:noreply, finish(data, :disallowed)}
     end
   end
@@ -291,17 +288,16 @@ defmodule Crawlview.Crawl.Server do
       data
       | public: public,
         robots: robots,
-        frontier: :queue.in(%{url: target, depth: 0, referrer: nil}, :queue.new()),
-        seen: MapSet.new([target]),
-        host_counts: %{},
-        next_host_start: %{},
+        frontier: Frontier.new(%{url: target, depth: 0, referrer: nil}, data.opts.per_host),
         rebases_left: data.rebases_left - 1
     }
 
     if Robots.allowed?(robots, target) do
       dispatch(data)
     else
-      finish(%{data | frontier: :queue.new()} |> put_queue_count(0), :disallowed)
+      %{data | frontier: Frontier.clear(data.frontier)}
+      |> put_queue_count(0)
+      |> finish(:disallowed)
     end
   end
 
@@ -319,10 +315,23 @@ defmodule Crawlview.Crawl.Server do
         finish(data, :completed)
 
       dispatch_capacity?(data) ->
-        case take_dispatchable(data) do
-          {:ok, item, data} -> data |> start_worker(item) |> dispatch()
-          {:wait, wait_ms, data} -> schedule_dispatch(data, wait_ms)
-          {:blocked, data} -> data
+        case Frontier.take(data.frontier, now_ms()) do
+          {:ok, item, frontier} ->
+            data = %{data | frontier: frontier}
+
+            data
+            |> put_queue_count(Frontier.queued(frontier))
+            |> start_worker(item)
+            |> dispatch()
+
+          {:wait, wait_ms} ->
+            schedule_dispatch(data, wait_ms)
+
+          :blocked ->
+            data
+
+          :empty ->
+            data
         end
 
       true ->
@@ -334,43 +343,6 @@ defmodule Crawlview.Crawl.Server do
     map_size(data.in_flight) < data.opts.concurrency and
       data.public.stats.visited + map_size(data.in_flight) < data.opts.max_pages and
       not frontier_empty?(data)
-  end
-
-  defp take_dispatchable(data) do
-    now = now_ms()
-    items = :queue.to_list(data.frontier)
-
-    case Enum.split_while(items, fn item -> not host_ready?(data, host(item.url), now) end) do
-      {_blocked, []} ->
-        case earliest_wait_ms(data, items, now) do
-          nil -> {:blocked, data}
-          wait_ms -> {:wait, wait_ms, data}
-        end
-
-      {blocked, [item | rest]} ->
-        frontier = :queue.from_list(blocked ++ rest)
-        data = %{data | frontier: frontier} |> put_queue_count(length(blocked) + length(rest))
-        {:ok, item, data}
-    end
-  end
-
-  defp host_ready?(data, host, now) do
-    # A host with no recorded start time is ready immediately, so the default
-    # must be `now` and never a literal like 0. Monotonic time has no epoch and
-    # is large and NEGATIVE on the BEAM, so `0` reads as "far in the future" and
-    # would hold every host back forever: the crawl would sit with a full
-    # frontier and dispatch nothing at all.
-    Map.get(data.host_counts, host, 0) < data.opts.per_host and
-      Map.get(data.next_host_start, host, now) <= now
-  end
-
-  defp earliest_wait_ms(data, items, now) do
-    items
-    |> Enum.filter(fn item ->
-      Map.get(data.host_counts, host(item.url), 0) < data.opts.per_host
-    end)
-    |> Enum.map(fn item -> max(Map.get(data.next_host_start, host(item.url), now) - now, 1) end)
-    |> Enum.min(fn -> nil end)
   end
 
   defp start_worker(data, item) do
@@ -390,13 +362,12 @@ defmodule Crawlview.Crawl.Server do
 
     work = %{pid: task.pid, host: host, item: item, timeout_timer: timeout_timer}
     in_flight = Map.put(data.in_flight, task.ref, work)
-    host_counts = Map.update(data.host_counts, host, 1, &(&1 + 1))
     # The site's own request always wins when it asks for more room; our floor only
     # ever slows us down relative to what the site permits, never speeds us up.
     delay_ms = max(Robots.crawl_delay(data.robots), data.opts.min_interval_ms)
-    next_host_start = Map.put(data.next_host_start, host, now_ms() + delay_ms)
+    frontier = Frontier.started(data.frontier, item, now_ms(), delay_ms)
 
-    %{data | in_flight: in_flight, host_counts: host_counts, next_host_start: next_host_start}
+    %{data | in_flight: in_flight, frontier: frontier}
     |> put_in_flight_count(map_size(in_flight))
   end
 
@@ -451,17 +422,11 @@ defmodule Crawlview.Crawl.Server do
   defp page_content(_result, _base, _root), do: {nil, []}
 
   defp enqueue_links(data, links, depth, referrer) do
-    Enum.reduce(links, data, fn url, acc ->
-      if MapSet.member?(acc.seen, url) or not Robots.allowed?(acc.robots, url) do
-        acc
-      else
-        item = %{url: url, depth: depth, referrer: referrer}
-        frontier = :queue.in(item, acc.frontier)
+    allowed = Enum.filter(links, &Robots.allowed?(data.robots, &1))
+    frontier = Frontier.put(data.frontier, allowed, depth, referrer)
 
-        %{acc | frontier: frontier, seen: MapSet.put(acc.seen, url)}
-        |> put_queue_count(:queue.len(frontier))
-      end
-    end)
+    %{data | frontier: frontier}
+    |> put_queue_count(Frontier.queued(frontier))
   end
 
   defp update_result_stats(stats, outcome) do
@@ -475,10 +440,7 @@ defmodule Crawlview.Crawl.Server do
   end
 
   defp release_slot(data, host) do
-    host_counts = Map.update!(data.host_counts, host, &(&1 - 1))
-    host_counts = if host_counts[host] == 0, do: Map.delete(host_counts, host), else: host_counts
-
-    %{data | host_counts: host_counts}
+    %{data | frontier: Frontier.finished(data.frontier, host)}
     |> put_in_flight_count(map_size(data.in_flight))
   end
 
@@ -515,14 +477,17 @@ defmodule Crawlview.Crawl.Server do
     # visitors would leave a public demo reporting itself busy for the whole TTL.
     {_new, _old} = Registry.update_value(@registry, data.public.id, fn _ -> :finished end)
 
+    # The snapshot remains readable for twenty minutes, but no queued URL can run
+    # again, so pending work and its crawl-wide deduplication set are dead weight.
+    frontier = Frontier.clear(data.frontier)
+
     # Finished servers deliberately live until the node restarts. This keeps a
     # snapshot readable without persistence; deployment or restart loses it.
     %{
       data
       | public: public,
-        frontier: :queue.new(),
+        frontier: frontier,
         in_flight: %{},
-        host_counts: %{},
         dispatch_timer: nil,
         expiry_timer: expiry_timer
     }
@@ -544,7 +509,7 @@ defmodule Crawlview.Crawl.Server do
     put_in(data.public.stats.in_flight, count)
   end
 
-  defp frontier_empty?(data), do: :queue.is_empty(data.frontier)
+  defp frontier_empty?(data), do: Frontier.empty?(data.frontier)
   defp budget_elapsed?(data), do: now_ms() - data.started_monotonic_ms >= data.opts.budget_ms
   defp now_ms, do: System.monotonic_time(:millisecond)
   defp host(url), do: URI.parse(url).host
