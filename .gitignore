@@ -38,3 +38,7 @@ npm-debug.log
 
 # Phoenix generates this as guidance for coding assistants. Useful locally, noise in a repo.
 AGENTS.md
+
+# The design contract. Kept on disk because it is where the module boundaries were argued out,
+# but it is working material rather than something a reader of this repo needs.
+DESIGN.md

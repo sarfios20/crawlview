@@ -122,9 +122,10 @@
           {Credo.Check.Refactor.Apply, []},
           {Credo.Check.Refactor.CondStatements, []},
           # These exhaustive dispatch tables cover a closed set of outcomes. They
-          # are deep rather than complex, and splitting them would create the
-          # shallow single-caller helpers forbidden by DESIGN.md principle 4. The
-          # threshold is intentionally only high enough for the existing code.
+          # are deep rather than complex, and splitting them would only produce
+          # shallow helpers with a single caller each, which this codebase avoids
+          # on purpose. The threshold is raised only far enough for the code that
+          # exists, not to make the check quiet.
           {Credo.Check.Refactor.CyclomaticComplexity, [max_complexity: 15]},
           {Credo.Check.Refactor.FilterCount, []},
           {Credo.Check.Refactor.FilterFilter, []},
@@ -135,9 +136,10 @@
           {Credo.Check.Refactor.NegatedConditionsInUnless, []},
           {Credo.Check.Refactor.NegatedConditionsWithElse, []},
           # These exhaustive dispatch tables cover a closed set of outcomes. They
-          # are deep rather than complex, and splitting them would create the
-          # shallow single-caller helpers forbidden by DESIGN.md principle 4. The
-          # threshold is intentionally only high enough for the existing code.
+          # are deep rather than complex, and splitting them would only produce
+          # shallow helpers with a single caller each, which this codebase avoids
+          # on purpose. The threshold is raised only far enough for the code that
+          # exists, not to make the check quiet.
           {Credo.Check.Refactor.Nesting, [max_nesting: 3]},
           {Credo.Check.Refactor.RedundantWithClauseResult, []},
           {Credo.Check.Refactor.RejectReject, []},

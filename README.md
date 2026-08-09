@@ -55,8 +55,8 @@ the site's policy. `Crawl.Frontier` decides what to start next and when, and it 
 time as an argument, which is what makes the pacing testable without running a crawl.
 
 The whole public interface of the crawler is `start/2`, `subscribe/1`, `snapshot/1` and `stop/1`.
-The LiveView and the JSON API are both clients of exactly that. The reasoning behind the module
-boundaries is in [DESIGN.md](DESIGN.md).
+The LiveView and the JSON API are both clients of exactly that, and neither keeps its own copy of
+crawl state.
 
 ## Politeness
 

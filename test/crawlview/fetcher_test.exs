@@ -258,7 +258,7 @@ defmodule Crawlview.FetcherTest do
     end
 
     test "falls back to defaults instead of raising on an invalid option" do
-      # DESIGN.md and the module's own invariant comment are explicit and
+      # The module's own contract is explicit and
       # unqualified: fetch/2 never raises and never returns an error tuple, for
       # ANY input. A crawler builds both urls and (indirectly, via crawl config)
       # option values from data it does not fully control, so there is no input
