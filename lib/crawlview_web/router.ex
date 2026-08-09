@@ -14,6 +14,12 @@ defmodule CrawlviewWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # This deliberately stays outside every pipeline, so future :browser or :api plugs cannot affect it;
+  # crawl rate limiting lives in request handlers and never touches this route.
+  scope "/", CrawlviewWeb do
+    get "/health", HealthController, :show
+  end
+
   scope "/", CrawlviewWeb do
     pipe_through :browser
 
