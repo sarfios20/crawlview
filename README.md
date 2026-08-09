@@ -5,6 +5,14 @@ finds them.
 
 It is not an SEO suite and not a general web crawler. One site, one visit, one picture.
 
+## Try it
+
+<https://crawlview-production.up.railway.app>
+
+That instance is one small box shared with everyone who opens it, so its ceilings are lower than
+the ones further down: 60 pages, depth 4, ninety seconds. A crawl that asks for more is clamped
+quietly rather than refused.
+
 ## Why a picture instead of a table
 
 Tools in this space hand you a table when they finish. A table is good for looking something up,
