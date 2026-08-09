@@ -8,13 +8,17 @@ import Config
 config :crawlview, CrawlviewWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
 # Force using SSL in production. This also sets the "strict-security-transport" header,
-# known as HSTS. If you have a health check endpoint, you may want to exclude it below.
+# known as HSTS.
 # Note `:force_ssl` is required to be set at compile-time.
 config :crawlview, CrawlviewWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      # paths: ["/health"],
+      # The platform's health probe reaches the container over plain HTTP and does not set
+      # x-forwarded-proto, so without this it would be answered with a redirect it does not
+      # follow, and a healthy process would be killed for looking unhealthy. Matching is exact,
+      # so this excludes /health and nothing beneath it.
+      paths: ["/health"],
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]
