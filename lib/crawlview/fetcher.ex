@@ -14,7 +14,7 @@ defmodule Crawlview.Fetcher.Result do
           | :server_error
           | :timeout
           | :unreachable
-          | :not_html
+          | :unacceptable_type
           | :too_large
 
   @type t :: %__MODULE__{
@@ -39,8 +39,8 @@ defmodule Crawlview.Fetcher do
   @moduledoc """
   Fetches the bytes for one URL and normalizes every result behind one interface.
 
-  Redirects are reported rather than followed, and response bodies are never
-  interpreted as HTML beyond checking their media type.
+  Redirects are reported rather than followed. Callers may restrict accepted
+  response media types. No HTTP-client values cross this boundary.
   """
 
   alias Crawlview.Fetcher.Result
@@ -58,6 +58,8 @@ defmodule Crawlview.Fetcher do
       #{@default_timeout_ms}.
     * `:max_bytes` - maximum accepted response body size in bytes; defaults to
       #{@default_max_bytes}.
+    * `:accept` - `:any` (the default) or a list of accepted media type strings.
+      Matching is case-insensitive and ignores response content-type parameters.
     * `:plug` - an optional Plug or `Req.Test` stub passed to the HTTP adapter.
       This is an intentional test seam: callers can substitute the byte source,
       but no Req request, response, or exception crosses this module boundary.
@@ -78,14 +80,15 @@ defmodule Crawlview.Fetcher do
 
     # Everything that can go wrong — including opts so malformed that reading
     # them would raise (e.g. `opts` not actually a keyword list) — is inside this
-    # try. An invalid timeout_ms/max_bytes falls back to its default rather than
-    # raising, so a bad option value never even reaches the rescue in practice;
+    # try. An invalid timeout_ms/max_bytes/accept falls back to its default rather
+    # than raising, so a bad option value never even reaches the rescue in practice;
     # the rescue exists as a backstop for whatever we didn't anticipate.
     result =
       try do
         timeout_ms = positive_integer_option(opts, :timeout_ms, @default_timeout_ms)
         max_bytes = non_negative_integer_option(opts, :max_bytes, @default_max_bytes)
-        do_fetch(url, opts, timeout_ms, max_bytes)
+        accept = accept_option(opts)
+        do_fetch(url, opts, timeout_ms, max_bytes, accept)
       rescue
         _exception -> transport_result(:unreachable)
       catch
@@ -95,7 +98,7 @@ defmodule Crawlview.Fetcher do
     %{result | duration_ms: elapsed_ms(started_at)}
   end
 
-  defp do_fetch(url, opts, timeout_ms, max_bytes) do
+  defp do_fetch(url, opts, timeout_ms, max_bytes, accept) do
     request_options = [
       url: url,
       method: :get,
@@ -104,7 +107,7 @@ defmodule Crawlview.Fetcher do
       retry: false,
       receive_timeout: timeout_ms,
       connect_options: [timeout: timeout_ms],
-      into: body_collector(max_bytes)
+      into: body_collector(max_bytes, accept)
     ]
 
     # `:plug` is passed through only when supplied; it is the deliberate test seam
@@ -118,10 +121,10 @@ defmodule Crawlview.Fetcher do
     request_options
     |> Req.new()
     |> Req.request()
-    |> normalize_request_result(url, max_bytes)
+    |> normalize_request_result(url, {max_bytes, accept})
   end
 
-  defp body_collector(max_bytes) do
+  defp body_collector(max_bytes, accept) do
     fn {:data, data}, {request, response} ->
       # Content-Length lets us halt near the start, while counting received bytes
       # protects against a missing or dishonest header. A single adapter chunk may
@@ -130,20 +133,19 @@ defmodule Crawlview.Fetcher do
       if content_length_too_large?(response, max_bytes) do
         {:halt, {request, %{response | body: :crawlview_too_large}}}
       else
-        collect_or_reject_chunk(request, response, data, max_bytes)
+        collect_or_reject_chunk(request, response, data, max_bytes, accept)
       end
     end
   end
 
-  defp collect_or_reject_chunk(request, response, data, max_bytes) do
+  defp collect_or_reject_chunk(request, response, data, max_bytes, accept) do
     # Req's Finch adapter has populated status and headers by the first data
-    # callback. Checking Content-Type here makes DESIGN.md's "bail after headers"
-    # behavior real instead of waiting until the entire body has been buffered.
-    # The adapter may still deliver this one non-HTML chunk before we can halt:
-    # today's `into:` callback receives headers and data as separate messages and
-    # offers no callback invocation on headers alone.
-    if initial_body?(response.body) and definitely_not_html?(response) do
-      {:halt, {request, %{response | body: :crawlview_not_html}}}
+    # callback. Rejecting a declared unacceptable type here avoids buffering a
+    # body the caller will discard. The adapter may still deliver this one chunk
+    # before we can halt because the callback is not invoked for headers alone.
+    if initial_body?(response.body) and
+         media_type_verdict(response, accept) == :unacceptable do
+      {:halt, {request, %{response | body: :crawlview_unacceptable_type}}}
     else
       collect_chunk(request, response, data, max_bytes)
     end
@@ -167,24 +169,37 @@ defmodule Crawlview.Fetcher do
   defp initial_body?({:crawlview_body, _chunks, _received_bytes}), do: false
   defp initial_body?(_initial_body), do: true
 
-  defp definitely_not_html?(response) do
-    case first_header(response, "content-type") do
-      content_type when is_binary(content_type) ->
-        media_type = content_type |> String.split(";", parts: 2) |> List.first() |> String.trim()
+  @spec media_type_verdict(Req.Response.t(), :any | [binary()]) ::
+          :acceptable | :unacceptable | :unknown
+  defp media_type_verdict(_response, :any), do: :acceptable
 
-        valid_media_type?(media_type) and
-          not html_content_type?(content_type)
+  defp media_type_verdict(response, accepted_media_types) do
+    case response |> first_header("content-type") |> response_media_type() do
+      {:ok, media_type} ->
+        if media_type in accepted_media_types, do: :acceptable, else: :unacceptable
 
-      _missing_or_unparseable ->
-        false
+      :error ->
+        :unknown
     end
   end
+
+  defp response_media_type(content_type) when is_binary(content_type) do
+    media_type = content_type |> String.split(";", parts: 2) |> List.first() |> String.trim()
+
+    if valid_media_type?(media_type) do
+      {:ok, String.downcase(media_type)}
+    else
+      :error
+    end
+  end
+
+  defp response_media_type(_missing_or_unparseable), do: :error
 
   defp valid_media_type?(media_type) do
     Regex.match?(~r/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/, media_type)
   end
 
-  defp normalize_request_result({:ok, response}, request_url, max_bytes) do
+  defp normalize_request_result({:ok, response}, request_url, {max_bytes, accept}) do
     status = response.status
     content_type = first_header(response, "content-type")
     location = first_header(response, "location")
@@ -206,14 +221,18 @@ defmodule Crawlview.Fetcher do
       status in 500..599 ->
         response_result(:server_error, status, content_type)
 
-      status in 200..299 and response.body == :crawlview_not_html ->
-        response_result(:not_html, status, content_type)
-
-      status in 200..299 and html_content_type?(content_type) ->
-        ok_result(status, content_type, collected_body(response.body))
-
       status in 200..299 ->
-        response_result(:not_html, status, content_type)
+        case media_type_verdict(response, accept) do
+          :acceptable ->
+            ok_result(status, content_type, collected_body(response.body))
+
+          :unacceptable ->
+            response_result(:unacceptable_type, status, content_type)
+
+          :unknown ->
+            # Streaming cannot reject an uncertain type early, but the final result must confirm it.
+            response_result(:unacceptable_type, status, content_type)
+        end
 
       status in 300..399 ->
         # A redirect without Location cannot be acted on. Treating that malformed
@@ -225,7 +244,7 @@ defmodule Crawlview.Fetcher do
     end
   end
 
-  defp normalize_request_result({:error, reason}, _request_url, _max_bytes) do
+  defp normalize_request_result({:error, reason}, _request_url, _fetch_options) do
     if timeout_reason?(reason) do
       transport_result(:timeout)
     else
@@ -233,7 +252,7 @@ defmodule Crawlview.Fetcher do
     end
   end
 
-  defp normalize_request_result(_unexpected, _request_url, _max_bytes) do
+  defp normalize_request_result(_unexpected, _request_url, _fetch_options) do
     transport_result(:unreachable)
   end
 
@@ -301,17 +320,6 @@ defmodule Crawlview.Fetcher do
 
   defp collected_body(_initial_body), do: ""
 
-  defp html_content_type?(nil), do: false
-
-  defp html_content_type?(content_type) do
-    content_type
-    |> String.split(";", parts: 2)
-    |> List.first()
-    |> String.trim()
-    |> String.downcase()
-    |> Kernel.==("text/html")
-  end
-
   defp content_length_too_large?(response, max_bytes) do
     response
     |> Req.Response.get_header("content-length")
@@ -349,6 +357,22 @@ defmodule Crawlview.Fetcher do
     case Keyword.get(opts, key, default) do
       value when is_integer(value) and value >= 0 -> value
       _invalid -> default
+    end
+  end
+
+  defp accept_option(opts) do
+    case Keyword.get(opts, :accept, :any) do
+      :any -> :any
+      media_types when is_list(media_types) -> normalize_accepted_media_types(media_types)
+      _invalid -> :any
+    end
+  end
+
+  defp normalize_accepted_media_types(media_types) do
+    if Enum.all?(media_types, &is_binary/1) do
+      Enum.map(media_types, &String.downcase/1)
+    else
+      :any
     end
   end
 

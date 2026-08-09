@@ -354,7 +354,9 @@ defmodule Crawlview.CrawlTest do
 
     crawl = crawl(site)
 
-    assert %{outcome: :not_html, status: 200, links: []} = crawl.snapshot.pages[@root]
+    assert %{outcome: :unacceptable_type, status: 200, links: []} =
+             crawl.snapshot.pages[@root]
+
     assert crawl.stats.visited == 1
   end
 

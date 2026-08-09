@@ -131,8 +131,25 @@ defmodule Crawlview.FetcherTest do
     end
   end
 
-  describe ":not_html outcome" do
-    test "discards a non-HTML response body" do
+  describe "media type acceptance" do
+    test "returns the body for an accepted media type" do
+      body = "plain text"
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "Text/Plain; charset=utf-8")
+        |> Plug.Conn.send_resp(200, body)
+      end
+
+      assert %Result{
+               outcome: :ok,
+               status: 200,
+               content_type: "Text/Plain; charset=utf-8",
+               body: ^body
+             } = Fetcher.fetch(@url, accept: ["TEXT/PLAIN"], plug: plug)
+    end
+
+    test "discards a body whose media type is not accepted" do
       plug = fn conn ->
         conn
         |> Plug.Conn.put_resp_header("content-type", "application/pdf")
@@ -140,15 +157,47 @@ defmodule Crawlview.FetcherTest do
       end
 
       assert %Result{
-               outcome: :not_html,
+               outcome: :unacceptable_type,
                status: 200,
                content_type: "application/pdf",
                redirect_to: nil,
                body: nil,
                duration_ms: duration_ms
-             } = Fetcher.fetch(@url, plug: plug)
+             } = Fetcher.fetch(@url, accept: ["text/html"], plug: plug)
 
       assert_duration(duration_ms)
+    end
+
+    test "discards a body with no declared media type when acceptance is restricted" do
+      plug = fn conn -> Plug.Conn.send_resp(conn, 200, "untyped body") end
+
+      assert %Result{outcome: :unacceptable_type, body: nil} =
+               Fetcher.fetch(@url, accept: ["text/html"], plug: plug)
+    end
+
+    test "accepts any media type by default" do
+      body = "plain text"
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/plain")
+        |> Plug.Conn.send_resp(200, body)
+      end
+
+      assert %Result{outcome: :ok, body: ^body} = Fetcher.fetch(@url, plug: plug)
+    end
+
+    test "falls back to accepting any media type for an invalid accept value" do
+      body = "plain text"
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/plain")
+        |> Plug.Conn.send_resp(200, body)
+      end
+
+      assert %Result{outcome: :ok, body: ^body} =
+               Fetcher.fetch(@url, accept: "text/html", plug: plug)
     end
   end
 

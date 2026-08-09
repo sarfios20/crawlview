@@ -421,7 +421,7 @@ defmodule CrawlviewWeb.CrawlLive do
   defp outcome_label(:server_error), do: "Server error"
   defp outcome_label(:timeout), do: "Timed out"
   defp outcome_label(:unreachable), do: "Unreachable"
-  defp outcome_label(:not_html), do: "Not HTML"
+  defp outcome_label(:unacceptable_type), do: "Not HTML"
   defp outcome_label(:too_large), do: "Too large"
   defp outcome_label(outcome), do: outcome |> to_string() |> String.replace("_", " ")
 

@@ -381,7 +381,7 @@ defmodule Crawlview.Crawl.Server do
 
     task =
       Task.Supervisor.async_nolink(@task_supervisor, fn ->
-        Fetcher.fetch(item.url, timeout_ms: data.opts.timeout_ms)
+        Fetcher.fetch(item.url, timeout_ms: data.opts.timeout_ms, accept: ["text/html"])
       end)
 
     host = host(item.url)
