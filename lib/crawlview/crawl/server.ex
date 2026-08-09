@@ -197,15 +197,13 @@ defmodule Crawlview.Crawl.Server do
         data = %{data | in_flight: in_flight}
         data = release_slot(data, work.host)
 
-        cond do
-          data.public.status != :running ->
-            {:noreply, dispatch(data)}
-
-          rebase_target(data, work.item, result) ->
-            {:noreply, rebase_root(data, rebase_target(data, work.item, result))}
-
-          true ->
-            {:noreply, dispatch(record_result(data, work.item, result))}
+        if data.public.status != :running do
+          {:noreply, dispatch(data)}
+        else
+          case rebase_target(data, work.item, result) do
+            nil -> {:noreply, dispatch(record_result(data, work.item, result))}
+            target -> {:noreply, rebase_root(data, target)}
+          end
         end
     end
   end
@@ -234,8 +232,7 @@ defmodule Crawlview.Crawl.Server do
         cancel_timer(work.timeout_timer)
 
         data =
-          data
-          |> Map.put(:in_flight, in_flight)
+          %{data | in_flight: in_flight}
           |> release_slot(work.host)
           |> dispatch()
 
@@ -399,10 +396,7 @@ defmodule Crawlview.Crawl.Server do
     delay_ms = max(Robots.crawl_delay(data.robots), data.opts.min_interval_ms)
     next_host_start = Map.put(data.next_host_start, host, now_ms() + delay_ms)
 
-    data
-    |> Map.put(:in_flight, in_flight)
-    |> Map.put(:host_counts, host_counts)
-    |> Map.put(:next_host_start, next_host_start)
+    %{data | in_flight: in_flight, host_counts: host_counts, next_host_start: next_host_start}
     |> put_in_flight_count(map_size(in_flight))
   end
 
@@ -464,9 +458,7 @@ defmodule Crawlview.Crawl.Server do
         item = %{url: url, depth: depth, referrer: referrer}
         frontier = :queue.in(item, acc.frontier)
 
-        acc
-        |> Map.put(:frontier, frontier)
-        |> Map.put(:seen, MapSet.put(acc.seen, url))
+        %{acc | frontier: frontier, seen: MapSet.put(acc.seen, url)}
         |> put_queue_count(:queue.len(frontier))
       end
     end)
@@ -486,8 +478,7 @@ defmodule Crawlview.Crawl.Server do
     host_counts = Map.update!(data.host_counts, host, &(&1 - 1))
     host_counts = if host_counts[host] == 0, do: Map.delete(host_counts, host), else: host_counts
 
-    data
-    |> Map.put(:host_counts, host_counts)
+    %{data | host_counts: host_counts}
     |> put_in_flight_count(map_size(data.in_flight))
   end
 
