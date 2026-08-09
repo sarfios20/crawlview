@@ -12,30 +12,6 @@ defmodule Crawlview.Crawl do
   @supervisor Crawlview.Crawl.Supervisor
   @registry Crawlview.Crawl.Registry
   @default_max_concurrent 8
-  @default_max_processes 100
-
-  @doc """
-  How many crawls may be RUNNING at once across the whole node.
-
-  This is the politeness ceiling: it bounds how much traffic this server can aim at the
-  outside world at any moment. Finished crawls stay readable but stop counting, because
-  they are not spending anyone's bandwidth any more.
-  """
-  @spec max_concurrent() :: pos_integer()
-  def max_concurrent do
-    Application.get_env(:crawlview, :max_concurrent_crawls, @default_max_concurrent)
-  end
-
-  @doc """
-  How many crawl processes may exist at once, running or merely still readable.
-
-  A different question with a different answer: this one is about this server's memory
-  rather than about other people's servers, so it is far more generous.
-  """
-  @spec max_processes() :: pos_integer()
-  def max_processes do
-    Application.get_env(:crawlview, :max_crawl_processes, @default_max_processes)
-  end
 
   defmodule State do
     @moduledoc """
@@ -114,6 +90,13 @@ defmodule Crawlview.Crawl do
       |> length()
 
     if running < max_concurrent(), do: :ok, else: {:error, :at_capacity}
+  end
+
+  # This is the politeness ceiling: it bounds traffic aimed at the outside world, unlike
+  # the supervisor's more generous memory ceiling. Finished crawls remain readable but
+  # stop counting because they no longer spend anyone's bandwidth.
+  defp max_concurrent do
+    Application.get_env(:crawlview, :max_concurrent_crawls, @default_max_concurrent)
   end
 
   defp start_server(root_url, opts) do

@@ -5,6 +5,8 @@ defmodule Crawlview.Application do
 
   use Application
 
+  @default_max_processes 100
+
   @impl true
   def start(_type, _args) do
     children = [
@@ -18,7 +20,7 @@ defmodule Crawlview.Application do
       {DynamicSupervisor,
        strategy: :one_for_one,
        name: Crawlview.Crawl.Supervisor,
-       max_children: Crawlview.Crawl.max_processes()},
+       max_children: Application.get_env(:crawlview, :max_crawl_processes, @default_max_processes)},
       {Task.Supervisor, name: Crawlview.Crawl.TaskSupervisor},
       CrawlviewWeb.RateLimit,
       # Start a worker by calling: Crawlview.Worker.start_link(arg)
