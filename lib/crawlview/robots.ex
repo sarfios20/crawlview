@@ -34,16 +34,14 @@ defmodule Crawlview.Robots do
   """
   @spec load(root_url :: String.t()) :: t()
   def load(root_url) do
-    try do
-      case robots_url(root_url) do
-        {:ok, robots_url} -> load_url(robots_url, @max_redirects)
-        _invalid_url -> permissive()
-      end
-    rescue
-      _exception -> permissive()
-    catch
-      _kind, _reason -> permissive()
+    case robots_url(root_url) do
+      {:ok, robots_url} -> load_url(robots_url, @max_redirects)
+      _invalid_url -> permissive()
     end
+  rescue
+    _exception -> permissive()
+  catch
+    _kind, _reason -> permissive()
   end
 
   @doc """
@@ -54,13 +52,11 @@ defmodule Crawlview.Robots do
   """
   @spec parse(binary()) :: t()
   def parse(body) when is_binary(body) do
-    try do
-      do_parse(body)
-    rescue
-      _exception -> permissive()
-    catch
-      _kind, _reason -> permissive()
-    end
+    do_parse(body)
+  rescue
+    _exception -> permissive()
+  catch
+    _kind, _reason -> permissive()
   end
 
   def parse(_body), do: permissive()

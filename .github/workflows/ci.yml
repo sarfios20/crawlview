@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir and Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20.0"
+          otp-version: "29.0.1"
+
+      - name: Cache dependencies and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            !_build/plts
+          key: ${{ runner.os }}-mix-elixir-1.20.0-otp-29.0.1-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-elixir-1.20.0-otp-29.0.1-
+
+      - name: Cache Dialyzer PLT
+        uses: actions/cache@v4
+        with:
+          path: _build/plts
+          key: ${{ runner.os }}-dialyzer-elixir-1.20.0-otp-29.0.1-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-dialyzer-elixir-1.20.0-otp-29.0.1-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Run Credo
+        run: mix credo --strict
+
+      - name: Run tests
+        run: mix test
+
+      - name: Run Dialyzer
+        run: mix dialyzer

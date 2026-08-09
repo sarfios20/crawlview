@@ -72,7 +72,7 @@ defmodule Crawlview.Fetcher do
   # value from untrusted input (exactly what a crawler does — hrefs scraped from
   # someone else's HTML) must not need a second, exception-shaped code path on
   # top of the Result outcome it already has to handle.
-  @spec fetch(url :: String.t(), opts :: keyword()) :: %Crawlview.Fetcher.Result{}
+  @spec fetch(url :: String.t(), opts :: keyword()) :: Crawlview.Fetcher.Result.t()
   def fetch(url, opts \\ []) do
     # A monotonic clock measures elapsed milliseconds without being distorted by
     # wall-clock corrections such as NTP adjustments or daylight-saving changes.
@@ -274,11 +274,9 @@ defmodule Crawlview.Fetcher do
   end
 
   defp absolute_location(request_url, location) do
-    try do
-      {:ok, request_url |> URI.merge(location) |> URI.to_string()}
-    rescue
-      _exception -> :error
-    end
+    {:ok, request_url |> URI.merge(location) |> URI.to_string()}
+  rescue
+    _exception -> :error
   end
 
   defp ok_result(status, content_type, body) do

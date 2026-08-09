@@ -24,33 +24,32 @@ defmodule Crawlview.Url do
     # visited, discards it, and simply stops going deeper. Normalization here is
     # therefore deliberately conservative: only transformations that are true by
     # specification, never ones that are merely usually true in practice.
-    try do
-      with %URI{} = base_uri <- parse_http_uri(base),
-           %URI{host: root_host} <- parse_http_uri(root) do
-        {urls, _seen} =
-          Enum.reduce(hrefs, {[], MapSet.new()}, fn href, {urls, seen} ->
-            case canonical_url(href, base_uri, root_host) do
-              nil ->
-                {urls, seen}
+    with %URI{} = base_uri <- parse_http_uri(base),
+         %URI{host: root_host} <- parse_http_uri(root) do
+      {urls, _seen} =
+        Enum.reduce(hrefs, {[], MapSet.new()}, fn href, {urls, seen} ->
+          url = canonical_url(href, base_uri, root_host)
 
-              url ->
-                if MapSet.member?(seen, url) do
-                  {urls, seen}
-                else
-                  {[url | urls], MapSet.put(seen, url)}
-                end
-            end
-          end)
+          cond do
+            is_nil(url) ->
+              {urls, seen}
 
-        Enum.reverse(urls)
-      else
-        _ -> []
-      end
-    rescue
+            MapSet.member?(seen, url) ->
+              {urls, seen}
+
+            true ->
+              {[url | urls], MapSet.put(seen, url)}
+          end
+        end)
+
+      Enum.reverse(urls)
+    else
       _ -> []
-    catch
-      _, _ -> []
     end
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
   end
 
   defp parse_http_uri(value) do
@@ -66,42 +65,40 @@ defmodule Crawlview.Url do
   end
 
   defp canonical_url(href, base_uri, root_host) do
-    try do
-      trimmed = String.trim(href)
+    trimmed = String.trim(href)
 
-      if trimmed == "" or String.starts_with?(trimmed, "#") do
-        nil
-      else
-        uri = URI.merge(base_uri, trimmed)
-        scheme = uri.scheme && String.downcase(uri.scheme)
-        host = uri.host && String.downcase(uri.host)
+    if trimmed == "" or String.starts_with?(trimmed, "#") do
+      nil
+    else
+      uri = URI.merge(base_uri, trimmed)
+      scheme = uri.scheme && String.downcase(uri.scheme)
+      host = uri.host && String.downcase(uri.host)
 
-        if scheme in ["http", "https"] and credible_host?(host) and
-             host == root_host and valid_port?(uri.port) and
-             encoded_component?(uri.path) and encoded_component?(uri.query) and
-             encoded_component?(uri.userinfo) do
-          # Same site means the SAME HOST, exactly. Treating `www.x` and `x` as one site
-          # was convenient and was a hole: only the root's host is DNS-checked, so a page
-          # on a public host could link to its own `www` spelling, that name could resolve
-          # somewhere private, and the crawl would fetch it unvalidated. Being strict here
-          # is what makes the security claim true rather than nearly true. The real-world
-          # case of a site answering under two names is handled where it belongs, by the
-          # root following its own redirect, and that path does validate the new name.
-          uri
-          |> Map.put(:scheme, scheme)
-          |> Map.put(:host, host)
-          |> Map.put(:port, canonical_port(scheme, uri.port))
-          |> Map.put(:path, canonical_path(uri.path))
-          |> Map.put(:query, canonical_query(uri.query))
-          |> Map.put(:fragment, nil)
-          |> URI.to_string()
-        end
+      if scheme in ["http", "https"] and credible_host?(host) and
+           host == root_host and valid_port?(uri.port) and
+           encoded_component?(uri.path) and encoded_component?(uri.query) and
+           encoded_component?(uri.userinfo) do
+        # Same site means the SAME HOST, exactly. Treating `www.x` and `x` as one site
+        # was convenient and was a hole: only the root's host is DNS-checked, so a page
+        # on a public host could link to its own `www` spelling, that name could resolve
+        # somewhere private, and the crawl would fetch it unvalidated. Being strict here
+        # is what makes the security claim true rather than nearly true. The real-world
+        # case of a site answering under two names is handled where it belongs, by the
+        # root following its own redirect, and that path does validate the new name.
+        uri
+        |> Map.put(:scheme, scheme)
+        |> Map.put(:host, host)
+        |> Map.put(:port, canonical_port(scheme, uri.port))
+        |> Map.put(:path, canonical_path(uri.path))
+        |> Map.put(:query, canonical_query(uri.query))
+        |> Map.put(:fragment, nil)
+        |> URI.to_string()
       end
-    rescue
-      _ -> nil
-    catch
-      _, _ -> nil
     end
+  rescue
+    _ -> nil
+  catch
+    _, _ -> nil
   end
 
   defp credible_host?(host) when is_binary(host) do
@@ -186,37 +183,35 @@ defmodule Crawlview.Url do
   """
   @spec public_http_url(String.t()) :: {:ok, String.t()} | {:error, atom()}
   def public_http_url(value) when is_binary(value) do
-    try do
-      uri = value |> String.trim() |> URI.parse()
-      scheme = uri.scheme && String.downcase(uri.scheme)
+    uri = value |> String.trim() |> URI.parse()
+    scheme = uri.scheme && String.downcase(uri.scheme)
 
-      cond do
-        scheme not in ["http", "https"] ->
-          {:error, :invalid_scheme}
+    cond do
+      scheme not in ["http", "https"] ->
+        {:error, :invalid_scheme}
 
-        not valid_public_uri?(uri) ->
-          {:error, :invalid_url}
+      not valid_public_uri?(uri) ->
+        {:error, :invalid_url}
 
-        true ->
-          uri = %{uri | scheme: scheme, host: String.downcase(uri.host)}
+      true ->
+        uri = %{uri | scheme: scheme, host: String.downcase(uri.host)}
 
-          case resolved_addresses(uri.host) do
-            nil ->
-              {:error, :unresolvable}
+        case resolved_addresses(uri.host) do
+          nil ->
+            {:error, :unresolvable}
 
-            addresses ->
-              if Enum.any?(addresses, &unsafe_address?/1) do
-                {:error, :private_address}
-              else
-                {:ok, canonical_public_url(uri)}
-              end
-          end
-      end
-    rescue
-      _ -> {:error, :invalid_url}
-    catch
-      _, _ -> {:error, :invalid_url}
+          addresses ->
+            if Enum.any?(addresses, &unsafe_address?/1) do
+              {:error, :private_address}
+            else
+              {:ok, canonical_public_url(uri)}
+            end
+        end
     end
+  rescue
+    _ -> {:error, :invalid_url}
+  catch
+    _, _ -> {:error, :invalid_url}
   end
 
   def public_http_url(_value), do: {:error, :invalid_url}

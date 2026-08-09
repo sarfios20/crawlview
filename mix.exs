@@ -11,7 +11,12 @@ defmodule Crawlview.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: [
+        plt_file: {:no_warn, "_build/plts/crawlview.plt"},
+        plt_add_deps: :app_tree,
+        ignore_warnings: ".dialyzer_ignore.exs"
+      ]
     ]
   end
 
@@ -68,7 +73,9 @@ defmodule Crawlview.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:req, "~> 0.5"},
-      {:floki, "~> 0.37"}
+      {:floki, "~> 0.37"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
 

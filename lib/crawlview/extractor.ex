@@ -10,19 +10,17 @@ defmodule Crawlview.Extractor do
 
   @spec extract(html :: binary()) :: %{title: String.t() | nil, hrefs: [String.t()]}
   def extract(html) do
-    try do
-      case Floki.parse_document(html) do
-        {:ok, tree} ->
-          %{title: extract_title(tree), hrefs: extract_hrefs(tree)}
+    case Floki.parse_document(html) do
+      {:ok, tree} ->
+        %{title: extract_title(tree), hrefs: extract_hrefs(tree)}
 
-        {:error, _reason} ->
-          @empty_result
-      end
-    rescue
-      _exception -> @empty_result
-    catch
-      _kind, _reason -> @empty_result
+      {:error, _reason} ->
+        @empty_result
     end
+  rescue
+    _exception -> @empty_result
+  catch
+    _kind, _reason -> @empty_result
   end
 
   defp extract_title(tree) do

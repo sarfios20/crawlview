@@ -372,6 +372,7 @@ defmodule CrawlviewWeb.CrawlLive do
   defp error_sentence(:at_capacity),
     do: "Too many crawls are running right now. Try again in half a minute."
 
+  # Keep the UI intelligible if public_http_url/1 learns a new error atom before this mapping does.
   defp error_sentence(_reason), do: "That address cannot be crawled."
 
   # Deliberately does not name a number. The page limit is an option that callers

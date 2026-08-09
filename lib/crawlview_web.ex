@@ -83,8 +83,8 @@ defmodule CrawlviewWeb do
       import CrawlviewWeb.CoreComponents
 
       # Common modules used in templates
-      alias Phoenix.LiveView.JS
       alias CrawlviewWeb.Layouts
+      alias Phoenix.LiveView.JS
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())

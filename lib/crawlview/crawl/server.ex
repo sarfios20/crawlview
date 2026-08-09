@@ -8,8 +8,8 @@ defmodule Crawlview.Crawl.Server do
 
   use GenServer
 
-  alias Crawlview.{Extractor, Fetcher, Page, Robots, Stats, Url}
   alias Crawlview.Crawl.{Frontier, State}
+  alias Crawlview.{Extractor, Fetcher, Page, Robots, Stats, Url}
 
   @registry Crawlview.Crawl.Registry
   @task_supervisor Crawlview.Crawl.TaskSupervisor
